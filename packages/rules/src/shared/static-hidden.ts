@@ -1143,7 +1143,7 @@ function buildStyleIndex(doc: Document): StyleIndex {
       const text = (style.textContent || "").slice(0, budget);
       budget -= text.length;
 
-      for (const rule of parseRules(text, ruleBudget)) {
+      for (const rule of parseRules(text, ruleBudget, { strictPreludes: true })) {
         ruleBudget--;
         order++;
         if (!HIDING_PROPERTY.test(rule.body)) continue;

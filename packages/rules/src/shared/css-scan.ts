@@ -160,10 +160,17 @@ export const MAX_RECORDED_AT_RULES = 8;
  * CSS took 26 seconds to index — a crawler-wide stall on attacker-supplied
  * input. This scanner is O(n) and allocates only the rules it yields.
  */
-export function parseRules(css: string, maxRules: number): RawRule[] {
+export function parseRules(
+  css: string,
+  maxRules: number,
+  options: { strictPreludes?: boolean } = {},
+): RawRule[] {
   const rules: RawRule[] = [];
   let i = 0;
   let preludeStart = 0;
+  // Parentheses open in the current prelude: with strictPreludes, a `;` inside
+  // them (`@supports (not (display:flex;gap:1em))`) does not end the prelude.
+  let parens = 0;
   const atRules: string[] = [];
   // Copied once per nesting state, not once per rule: a deep stack of at-rules
   // around thousands of rules would otherwise copy the stack for each.
@@ -180,11 +187,14 @@ export function parseRules(css: string, maxRules: number): RawRule[] {
       i = skipString(css, i);
       continue;
     }
+    if (ch === "(") parens++;
+    else if (ch === ")" && parens > 0) parens--;
     // A statement at-rule (`@import url(…);`) or a stray semicolon: whatever
     // came before it was not a selector.
-    if (ch === ";") {
+    if (ch === ";" && !(options.strictPreludes && parens > 0)) {
       i++;
       preludeStart = i;
+      parens = 0;
       continue;
     }
     if (ch === "}") {
@@ -194,18 +204,24 @@ export function parseRules(css: string, maxRules: number): RawRule[] {
       }
       i++;
       preludeStart = i;
+      parens = 0;
       continue;
     }
     if (ch !== "{") {
       i++;
       continue;
     }
+    parens = 0;
 
     const prelude = css.slice(preludeStart, i).trim();
+    // Off by default: content/hidden-text has always read the raw prelude. A
+    // comment before an at-rule (`/*!sc*/@media …`) otherwise hides the `@`.
+    // Only the at-rule test reads past comments; a selector keeps them.
+    const atPrelude = options.strictPreludes ? replaceComments(prelude, " ").trim() : prelude;
     // `@media`, `@supports`, `@layer`, `@keyframes`: descend, marking everything
     // inside as conditional rather than skipping past it.
-    if (prelude.startsWith("@")) {
-      atRules.push(prelude);
+    if (atPrelude.startsWith("@")) {
+      atRules.push(atPrelude);
       snapshot = null;
       i++;
       preludeStart = i;

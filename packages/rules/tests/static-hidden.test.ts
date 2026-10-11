@@ -455,6 +455,24 @@ describe("static-hidden: third review round", () => {
     ).toBe("unknown:selector");
   });
 
+  test("a comment before an at-rule, or a `;` inside its parentheses, keeps it an at-rule", () => {
+    // styled-components writes `/*!sc*/` before `@media`; the Guardian ships
+    // `@supports (not (display:flex;gap:1em))`. Read as style rules, both
+    // looked like CSS nesting and unsettled the whole page.
+    expect(
+      verdict(
+        '<b id="t" class="x"></b>',
+        "<style>/*!sc*/\n@media print{.x{display:none}}.y{display:none}</style>",
+      ),
+    ).toBe("shown");
+    expect(
+      verdict(
+        '<b id="t" class="x"></b>',
+        "<style>.x{display:none}@supports (not (display:flex;gap:1em)){.q{display:grid}}</style>",
+      ),
+    ).toBe("hidden");
+  });
+
   test("a comment inside a quoted attribute value is text", () => {
     expect(
       verdict(
