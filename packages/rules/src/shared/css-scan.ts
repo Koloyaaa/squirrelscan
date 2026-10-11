@@ -214,11 +214,12 @@ export function parseRules(css: string, maxRules: number): RawRule[] {
       else if (c === "}") depth--;
       j++;
     }
+    snapshot ??= atRules.slice(0, MAX_RECORDED_AT_RULES);
     rules.push({
       selector: prelude,
       body: css.slice(bodyStart, depth === 0 ? j - 1 : css.length),
       conditional: atRules.length > 0,
-      atRules: (snapshot ??= atRules.slice(0, MAX_RECORDED_AT_RULES)),
+      atRules: snapshot,
       atDepth: atRules.length,
     });
     i = j;
