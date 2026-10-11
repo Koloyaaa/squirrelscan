@@ -145,6 +145,33 @@ const INTERACTION_PSEUDOS = new Set([
 /** Pseudo-elements CSS2 allowed with a single colon. */
 const LEGACY_PSEUDO_ELEMENTS = new Set(["before", "after", "first-line", "first-letter"]);
 
+/**
+ * Pseudo-elements a browser accepts. Any other one, vendor-prefixed or made up,
+ * makes a browser drop the whole rule, so it cannot be skipped as harmless.
+ */
+const KNOWN_PSEUDO_ELEMENTS = new Set([
+  ...LEGACY_PSEUDO_ELEMENTS,
+  "marker",
+  "placeholder",
+  "selection",
+  "backdrop",
+  "file-selector-button",
+  "cue",
+  "cue-region",
+  "part",
+  "slotted",
+  "highlight",
+  "spelling-error",
+  "grammar-error",
+  "target-text",
+  "details-content",
+  "view-transition",
+  "view-transition-group",
+  "view-transition-image-pair",
+  "view-transition-old",
+  "view-transition-new",
+]);
+
 const CSS_WHITESPACE = /[\t\n\f\r ]/;
 const IDENT_CHAR = /[-_a-zA-Z0-9]/;
 
@@ -152,6 +179,15 @@ class SelectorSyntaxError extends Error {}
 
 /** Returned for a selector whose subject is a pseudo-element: it styles a generated box, not the element. */
 const PSEUDO_ELEMENT = Symbol("pseudo-element");
+
+/**
+ * Returned for a pseudo-element a browser does not accept (`::-moz-placeholder`
+ * in Chrome, a made-up name). It styles no element either, but a browser drops
+ * the whole rule over it, so it voids the other selectors in its list.
+ */
+const UNKNOWN_PSEUDO_ELEMENT = Symbol("unknown-pseudo-element");
+
+type ParsedSelector = ComplexSelector | typeof PSEUDO_ELEMENT | typeof UNKNOWN_PSEUDO_ELEMENT;
 
 /** Reads a CSS identifier at `i`, decoding escapes (`.md\:hidden`, `.\31 0`). */
 function readIdent(s: string, start: number): { ident: string; end: number } | null {
@@ -207,7 +243,7 @@ function findClose(s: string, start: number, open: string, close: string): numbe
   return -1;
 }
 
-/** Splits on top-level commas: `:is(.a, .b), .c` is two selectors. */
+/** Splits on top-level commas: `:is(.a, .b), .c` is two selectors, `.a,` is `.a` and an empty one. */
 export function splitSelectorList(text: string): string[] {
   const parts: string[] = [];
   let depth = 0;
@@ -232,7 +268,8 @@ export function splitSelectorList(text: string): string[] {
     i++;
   }
   parts.push(text.slice(start));
-  return parts.map((p) => p.trim()).filter(Boolean);
+  // Empty entries are kept: `button, {}` is an invalid list, not `button`.
+  return parts.map((p) => p.trim());
 }
 
 /** Decodes CSS escapes in a string or identifier: `\61` and `\61 ` are `a`, `\:` is `:`. */
@@ -290,14 +327,15 @@ function compareSpecificity(a: Specificity, b: Specificity): number {
 function parseCompoundList(text: string, depth: number): Compound[] | null {
   const out: Compound[] = [];
   for (const part of splitSelectorList(text)) {
-    let parsed: ComplexSelector | typeof PSEUDO_ELEMENT;
+    if (part === "") return null;
+    let parsed: ParsedSelector;
     try {
       parsed = parseComplex(part, depth);
     } catch (err) {
       if (err instanceof SelectorSyntaxError) return null;
       throw err;
     }
-    if (parsed === PSEUDO_ELEMENT || parsed.compounds.length !== 1) return null;
+    if (typeof parsed === "symbol" || parsed.compounds.length !== 1) return null;
     out.push(parsed.compounds[0]);
   }
   return out.length > 0 ? out : null;
@@ -324,11 +362,11 @@ function parsePseudo(name: string, args: string | null, depth: number): PseudoTe
 }
 
 /**
- * Parses one complex selector (`.nav > li:hover .sub`). Returns PSEUDO_ELEMENT
+ * Parses one complex selector (`.nav > li:hover .sub`). Returns PSEUDO_ELEMENT (or UNKNOWN_PSEUDO_ELEMENT)
  * for a selector whose subject is a pseudo-element, and throws on syntax this
  * module does not read (namespaces, nesting).
  */
-function parseComplex(text: string, depth = 0): ComplexSelector | typeof PSEUDO_ELEMENT {
+function parseComplex(text: string, depth = 0): ParsedSelector {
   const s = text.trim();
   if (s.length > MAX_SELECTOR_CHARS) throw new SelectorSyntaxError();
   const compounds: Compound[] = [];
@@ -394,11 +432,11 @@ function parseComplex(text: string, depth = 0): ComplexSelector | typeof PSEUDO_
     }
     if (c === ":") {
       if (s[i + 1] === ":") {
-        // A browser drops the whole rule over a vendor pseudo-element it does
-        // not know (`::-moz-placeholder` in Chrome), so it cannot be skipped
-        // as harmless.
-        if (s[i + 2] === "-") throw new SelectorSyntaxError();
-        return PSEUDO_ELEMENT;
+        const pseudoElement = readIdent(s, i + 2);
+        if (!pseudoElement) throw new SelectorSyntaxError();
+        return KNOWN_PSEUDO_ELEMENTS.has(pseudoElement.ident.toLowerCase())
+          ? PSEUDO_ELEMENT
+          : UNKNOWN_PSEUDO_ELEMENT;
       }
       const id = readIdent(s, i + 1);
       if (!id) throw new SelectorSyntaxError();
@@ -446,15 +484,28 @@ function parseComplex(text: string, depth = 0): ComplexSelector | typeof PSEUDO_
  * whether the rule MAY apply.
  */
 function looseSubject(text: string): Compound {
-  let flat = "";
+  // The text after the last top-level, unescaped combinator, with bracketed
+  // and parenthesised parts dropped.
+  let last = "";
   let depth = 0;
-  for (const c of text) {
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "\\") {
+      if (depth === 0) last += text.slice(i, i + 2);
+      i += 2;
+      continue;
+    }
     if (c === "(" || c === "[") depth++;
     else if (c === ")" || c === "]") depth = Math.max(0, depth - 1);
-    else if (depth === 0) flat += c;
+    else if (depth === 0) {
+      last = CSS_WHITESPACE.test(c) || c === ">" || c === "+" || c === "~" ? "" : last + c;
+    }
+    i++;
   }
-  const pieces = flat.split(/[\s>+~]+/).filter(Boolean);
-  const last = pieces[pieces.length - 1] ?? "";
+  // A namespace prefix (`svg|a`, `*|a`) says nothing about the element's name.
+  const bar = last.lastIndexOf("|");
+  if (bar !== -1 && last[bar - 1] !== "\\") last = last.slice(bar + 1);
   const compound = emptyCompound();
   for (const m of last.matchAll(/([.#])((?:\\.|[-_a-zA-Z0-9\u0080-\uffff])+)/g)) {
     const name = decodeEscapes(m[2]);
@@ -679,7 +730,7 @@ function mediaQueryCondition(query: string): Condition {
 /** A media query list applies if any of its queries does. */
 export function mediaCondition(list: string): Condition {
   let best: Condition = "never";
-  const queries = splitSelectorList(list.toLowerCase());
+  const queries = splitSelectorList(list.toLowerCase()).filter(Boolean);
   if (queries.length === 0) return "always";
   for (const query of queries) {
     const c = mediaQueryCondition(query.replace(/\s+/g, " "));
@@ -913,13 +964,29 @@ function styleElementCondition(style: Element): Condition {
   return combineConditions(conditions);
 }
 
+const CSS_COMMENT = /\/\*[\s\S]*?(?:\*\/|$)/g;
+
 /**
  * The rule scanner keeps comments that sit before or inside a selector, such as
  * the marker styled-components writes before every rule. A comment is not
  * whitespace in a selector: `.a`, a comment, then `.b` is the compound `.a.b`.
+ * Between two identifier characters it splits one token into two, which no
+ * selector parses, so it is replaced by a character the parser rejects.
  */
-function stripComments(text: string): string {
-  return text.includes("/*") ? text.replace(/\/\*[\s\S]*?(?:\*\/|$)/g, "").trim() : text;
+function stripSelectorComments(text: string): string {
+  if (!text.includes("/*")) return text;
+  return text
+    .replace(CSS_COMMENT, (comment: string, offset: number) =>
+      /[-\w]/.test(text[offset - 1] ?? "") && /[-\w]/.test(text[offset + comment.length] ?? "")
+        ? "/"
+        : "",
+    )
+    .trim();
+}
+
+/** In an at-rule prelude a comment separates tokens like whitespace. */
+function stripPreludeComments(text: string): string {
+  return text.includes("/*") ? text.replace(CSS_COMMENT, " ").trim() : text;
 }
 
 /**
@@ -983,7 +1050,9 @@ function buildStyleIndex(doc: Document): StyleIndex {
       if (!/display|visibility/i.test(rule.body)) continue;
       const condition = combineConditions([
         elementCondition,
-        ...rule.atRules.map((prelude) => atRuleCondition(stripComments(prelude))),
+        ...rule.atRules.map((prelude) => atRuleCondition(stripPreludeComments(prelude))),
+        // Nesting deeper than the scanner records is not evaluated.
+        rule.atDepth > rule.atRules.length ? "conditional" : "always",
       ]);
       if (condition === "never") continue;
 
@@ -991,16 +1060,26 @@ function buildStyleIndex(doc: Document): StyleIndex {
       if (decls.length === 0) continue;
       // Inside @layer or @scope the cascade is not modelled: a matching rule
       // there may beat any other, whatever its specificity.
-      const cascadeKnown = rule.atRules.every((prelude) =>
-        /^@(?:-[a-z]+-)?(?:media|supports|container)\b/i.test(stripComments(prelude)),
-      );
+      const cascadeKnown =
+        rule.atDepth === rule.atRules.length &&
+        rule.atRules.every((prelude) =>
+          /^@(?:-[a-z]+-)?(?:media|supports|container)\b/i.test(stripPreludeComments(prelude)),
+        );
 
       const entries: Array<{ selector: ComplexSelector | null; subject: Compound }> = [];
       let listInvalid = false;
-      for (const selectorText of splitSelectorList(stripComments(rule.selector))) {
+      for (const selectorText of splitSelectorList(stripSelectorComments(rule.selector))) {
+        if (selectorText === "") {
+          listInvalid = true;
+          continue;
+        }
         try {
           const parsed = parseComplex(selectorText);
           if (parsed === PSEUDO_ELEMENT) continue;
+          if (parsed === UNKNOWN_PSEUDO_ELEMENT) {
+            listInvalid = true;
+            continue;
+          }
           entries.push({
             selector: parsed,
             subject: parsed.compounds[parsed.compounds.length - 1],
@@ -1050,6 +1129,7 @@ function candidateRules(index: StyleIndex, el: Element): IndexedRule[] {
 function appliedDecls(index: StyleIndex, el: Element, page: { steps: number }): AppliedDecl[] {
   const applied: AppliedDecl[] = [];
   for (const rule of candidateRules(index, el)) {
+    if (--page.steps < 0) throw new PageBudgetError();
     // Unparsed: whether its loosely-read subject fits decides "may apply".
     const match: Match = rule.selector
       ? matchSelector(rule.selector, el, page)
@@ -1060,7 +1140,11 @@ function appliedDecls(index: StyleIndex, el: Element, page: { steps: number }): 
     let may: UnknownReason | null;
     if (match !== true) may = match;
     else if (rule.approx) may = rule.approx;
-    else may = rule.condition === "always" ? null : "conditional";
+    else if (rule.condition !== "always") may = "conditional";
+    // Certain to match, but where it ranks in the cascade is not known, so it
+    // may or may not win.
+    else if (rule.decls[0]?.specificity === null) may = "selector";
+    else may = null;
     const variant = match === true && rule.condition === "variant";
     for (const decl of rule.decls) applied.push({ decl, may, variant });
   }

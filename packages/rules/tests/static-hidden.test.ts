@@ -360,3 +360,64 @@ describe("static-hidden: cases a browser shows that a naive read would hide", ()
     expect(performance.now() - started).toBeLessThan(2_000);
   });
 });
+
+describe("static-hidden: second review round", () => {
+  test("a certain match of unknown specificity cannot settle the cascade", () => {
+    expect(
+      verdict('<b id="t"></b>', "<style>#t{display:none}:is(b, :has(#x)){display:block}</style>"),
+    ).toBe("unknown:selector");
+  });
+
+  test("a comment splits a token: `n/**/one` is not `none`", () => {
+    expect(verdict('<b id="t" style="display:n/**/one"></b>')).toBe("shown");
+    expect(verdict('<b id="t" class="a"></b>', "<style>.a/**/b{display:none}</style>")).toBe(
+      "unknown:selector",
+    );
+  });
+
+  test("an escaped combinator character stays inside a loosely read subject", () => {
+    expect(
+      verdict(
+        '<b id="t" class="foo+bar"></b>',
+        "<style>b{display:none}*|b.foo\\+bar{display:block}</style>",
+      ),
+    ).toBe("unknown:selector");
+  });
+
+  test("a vendor pseudo-element rule alone styles no element", () => {
+    expect(verdict('<b id="t"></b>', "<style>::-webkit-scrollbar{display:none}</style>")).toBe(
+      "shown",
+    );
+    expect(verdict('<b id="t"></b>', "<style>b::-webkit-scrollbar{display:none}</style>")).toBe(
+      "shown",
+    );
+  });
+
+  test("an empty entry or an unknown pseudo-element voids the whole list", () => {
+    expect(verdict('<b id="t"></b>', "<style>b, {display:none}</style>")).toBe("unknown:selector");
+    expect(verdict('<b id="t"></b>', "<style>b, i::madeup{display:none}</style>")).toBe(
+      "unknown:selector",
+    );
+  });
+
+  test("deeply nested at-rules stay bounded and read as conditional", () => {
+    const css = `${"@media all{".repeat(20_000)}${"b{display:none}".repeat(19_000)}${"}".repeat(20_000)}`;
+    const started = performance.now();
+    expect(verdict('<b id="t"></b>', `<style>${css}</style>`)).toBe("unknown:conditional");
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+
+  test("selectors that cannot be parsed still spend the page budget", () => {
+    const css = "&{display:none}".repeat(19_000);
+    const buttons = "<b></b>".repeat(2_000);
+    const { document } = parseHTML(
+      `<!doctype html><html><head><style>${css}</style></head><body>${buttons}<b id="t"></b></body></html>`,
+    );
+    const resolver = createStaticVisibility(document, { ariaHidden: false });
+    const started = performance.now();
+    for (const b of document.querySelectorAll("b")) resolver.visibility(b as unknown as Element);
+    expect(performance.now() - started).toBeLessThan(3_000);
+    const last = resolver.visibility(document.querySelector("#t") as unknown as Element);
+    expect(last.state).toBe("unknown");
+  });
+});

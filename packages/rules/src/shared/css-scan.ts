@@ -55,9 +55,10 @@ export function scanDeclarations(
 
   const flush = (end: number): void => {
     let chunk = css.slice(chunkStart, end);
-    // Off by default: content/hidden-text has always read the raw chunk.
+    // Off by default: content/hidden-text has always read the raw chunk. A
+    // comment separates tokens, so it becomes a space: `n/**/one` is not `none`.
     if (options.stripComments && chunk.includes("/*")) {
-      chunk = chunk.replace(/\/\*[\s\S]*?(?:\*\/|$)/g, "");
+      chunk = chunk.replace(/\/\*[\s\S]*?(?:\*\/|$)/g, " ");
     }
     let colon = -1;
     let d = 0;
@@ -122,9 +123,18 @@ export interface RawRule {
    * selectors it names untrustworthy instead.
    */
   conditional: boolean;
-  /** Preludes of the enclosing at-rules (`@media (max-width: 600px)`), outermost first. */
-  atRules: string[];
+  /**
+   * Preludes of the enclosing at-rules (`@media (max-width: 600px)`), outermost
+   * first, at most MAX_RECORDED_AT_RULES of them. Rules sharing one nesting
+   * state share the array.
+   */
+  atRules: readonly string[];
+  /** How many at-rules enclose the rule; more than `atRules` holds when nesting runs deeper. */
+  atDepth: number;
 }
+
+/** Enclosing at-rules recorded per rule; deeper nesting is only counted. */
+export const MAX_RECORDED_AT_RULES = 8;
 
 /**
  * A single linear pass over a stylesheet. Deliberately hand-written: the regex
@@ -138,6 +148,9 @@ export function parseRules(css: string, maxRules: number): RawRule[] {
   let i = 0;
   let preludeStart = 0;
   const atRules: string[] = [];
+  // Copied once per nesting state, not once per rule: a deep stack of at-rules
+  // around thousands of rules would otherwise copy the stack for each.
+  let snapshot: readonly string[] | null = null;
 
   while (i < css.length && rules.length < maxRules) {
     const ch = css[i];
@@ -158,7 +171,10 @@ export function parseRules(css: string, maxRules: number): RawRule[] {
       continue;
     }
     if (ch === "}") {
-      atRules.pop();
+      if (atRules.length > 0) {
+        atRules.pop();
+        snapshot = null;
+      }
       i++;
       preludeStart = i;
       continue;
@@ -173,6 +189,7 @@ export function parseRules(css: string, maxRules: number): RawRule[] {
     // inside as conditional rather than skipping past it.
     if (prelude.startsWith("@")) {
       atRules.push(prelude);
+      snapshot = null;
       i++;
       preludeStart = i;
       continue;
@@ -201,7 +218,8 @@ export function parseRules(css: string, maxRules: number): RawRule[] {
       selector: prelude,
       body: css.slice(bodyStart, depth === 0 ? j - 1 : css.length),
       conditional: atRules.length > 0,
-      atRules: [...atRules],
+      atRules: (snapshot ??= atRules.slice(0, MAX_RECORDED_AT_RULES)),
+      atDepth: atRules.length,
     });
     i = j;
     preludeStart = i;
