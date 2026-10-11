@@ -546,6 +546,12 @@ interface ElementFacts {
   tag: string;
   id: string | null;
   classes: Set<string>;
+  /**
+   * The document has no doctype, so a browser renders it in quirks mode,
+   * where class and id selectors match ASCII case-insensitively. `id` and
+   * `classes` are then stored lower-cased.
+   */
+  quirks: boolean;
 }
 
 const factsCache = new WeakMap<Element, ElementFacts>();
@@ -553,12 +559,73 @@ const factsCache = new WeakMap<Element, ElementFacts>();
 function factsOf(el: Element): ElementFacts {
   let facts = factsCache.get(el);
   if (!facts) {
+    const quirks = !el.ownerDocument?.doctype;
+    const fold = (text: string): string => (quirks ? asciiLower(text) : text);
     const classes = (getAttrCI(el, "class") ?? "").split(/[\t\n\f\r ]+/).filter(Boolean);
-    facts = { tag: tagOf(el), id: getAttrCI(el, "id"), classes: new Set(classes) };
+    const id = getAttrCI(el, "id");
+    facts = {
+      tag: tagOf(el),
+      id: id === null ? null : fold(id),
+      classes: new Set(classes.map(fold)),
+      quirks,
+    };
     factsCache.set(el, facts);
   }
   return facts;
 }
+
+/**
+ * Attributes whose values HTML matches case-insensitively in selectors
+ * (`[type="BUTTON"]` matches `type="button"`).
+ */
+const CASE_INSENSITIVE_ATTRS = new Set([
+  "accept",
+  "accept-charset",
+  "align",
+  "alink",
+  "axis",
+  "bgcolor",
+  "charset",
+  "checked",
+  "clear",
+  "codetype",
+  "color",
+  "compact",
+  "declare",
+  "defer",
+  "dir",
+  "direction",
+  "disabled",
+  "enctype",
+  "face",
+  "frame",
+  "hreflang",
+  "http-equiv",
+  "lang",
+  "language",
+  "link",
+  "media",
+  "method",
+  "multiple",
+  "nohref",
+  "noresize",
+  "noshade",
+  "nowrap",
+  "readonly",
+  "rel",
+  "rev",
+  "rules",
+  "scope",
+  "scrolling",
+  "selected",
+  "shape",
+  "target",
+  "text",
+  "type",
+  "valign",
+  "valuetype",
+  "vlink",
+]);
 
 function tagOf(el: Element): string {
   return (el.localName || el.tagName || "").toLowerCase();
@@ -568,8 +635,9 @@ function matchAttr(el: Element, test: AttrTest): boolean {
   const raw = getAttrCI(el, test.name);
   if (raw === null) return false;
   if (test.op === "") return true;
-  const value = test.caseInsensitive ? raw.toLowerCase() : raw;
-  const want = test.caseInsensitive ? test.value.toLowerCase() : test.value;
+  const fold = test.caseInsensitive || CASE_INSENSITIVE_ATTRS.has(test.name);
+  const value = fold ? asciiLower(raw) : raw;
+  const want = fold ? asciiLower(test.value) : test.value;
   switch (test.op) {
     case "=":
       return value === want;
@@ -642,8 +710,11 @@ function matchCompound(el: Element, compound: Compound, budget: StepBudget): Mat
   if (--budget.match < 0) throw new MatchBudgetError();
   const facts = factsOf(el);
   if (compound.tag !== null && facts.tag !== compound.tag) return false;
-  for (const id of compound.ids) if (facts.id !== id) return false;
-  for (const cls of compound.classes) if (!facts.classes.has(cls)) return false;
+  for (const id of compound.ids)
+    if (facts.id !== (facts.quirks ? asciiLower(id) : id)) return false;
+  for (const cls of compound.classes) {
+    if (!facts.classes.has(facts.quirks ? asciiLower(cls) : cls)) return false;
+  }
   for (const attr of compound.attrs) if (!matchAttr(el, attr)) return false;
   let result: Match = true;
   for (const pseudo of compound.pseudos) {
@@ -967,8 +1038,10 @@ function addToIndex(index: StyleIndex, rule: IndexedRule): void {
     if (list) list.push(rule);
     else map.set(key, [rule]);
   };
-  if (subject.ids.length > 0) push(index.byId, subject.ids[0]);
-  else if (subject.classes.length > 0) push(index.byClass, subject.classes[0]);
+  // Ids and classes are keyed ASCII-lower-cased so a quirks-mode page finds
+  // `.X` for `class="x"`; matchCompound then compares with the right case.
+  if (subject.ids.length > 0) push(index.byId, asciiLower(subject.ids[0]));
+  else if (subject.classes.length > 0) push(index.byClass, asciiLower(subject.classes[0]));
   else if (subject.tag !== null) push(index.byTag, subject.tag);
   else if (subject.attrs.length > 0) push(index.byAttr, subject.attrs[0].name);
   else index.universal.push(rule);
@@ -1037,15 +1110,43 @@ interface HidingDeclaration {
 }
 
 /** `display` and `visibility` declarations, with the `all` shorthand counted as both. */
+/** Trims CSS whitespace only: a no-break space is part of an identifier, not padding. */
+function cssTrim(text: string): string {
+  return text.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "");
+}
+
+/** Lower-cases ASCII letters only, as CSS keyword matching does. */
+function asciiLower(text: string): string {
+  return text.replace(/[A-Z]+/g, (m) => m.toLowerCase());
+}
+
+/** A trailing `!important`, with CSS whitespace (and comments, already spaces) around the `!`. */
+const IMPORTANT_SUFFIX = /![\t\n\f\r ]*important[\t\n\f\r ]*$/i;
+
+/**
+ * `display` and `visibility` declarations, with the `all` shorthand counted as
+ * both. Read from the text as written, the way a browser reads it: only CSS
+ * whitespace is trimmed, only ASCII is case-folded, and `!important` counts
+ * only at the very end, so `display:\u00a0none` or `display:!important none`
+ * is dropped as invalid rather than read as `none`.
+ */
 function hidingDeclarations(css: string): HidingDeclaration[] {
   const out: HidingDeclaration[] = [];
-  for (const d of scanDeclarations(css, { stripComments: true })) {
-    if (d.prop === "display" || d.prop === "visibility") {
-      out.push({ prop: d.prop, value: d.value, important: d.important });
-    } else if (d.prop === "all" && CSS_WIDE_KEYWORDS.has(d.value)) {
+  for (const d of scanDeclarations(css, { strict: true })) {
+    const prop = asciiLower(cssTrim(d.rawProp));
+    if (prop !== "display" && prop !== "visibility" && prop !== "all") continue;
+    let value = cssTrim(d.rawValue);
+    const important = IMPORTANT_SUFFIX.exec(value);
+    if (important) value = cssTrim(value.slice(0, important.index));
+    if (value.includes("!") || value === "") continue;
+    value = asciiLower(value);
+    if (prop === "all") {
+      if (!CSS_WIDE_KEYWORDS.has(value)) continue;
       // `all: initial` resets both, which shows an element `display:none` hid.
-      out.push({ prop: "display", value: d.value, important: d.important });
-      out.push({ prop: "visibility", value: d.value, important: d.important });
+      out.push({ prop: "display", value, important: important !== null });
+      out.push({ prop: "visibility", value, important: important !== null });
+    } else {
+      out.push({ prop, value, important: important !== null });
     }
   }
   return out;
@@ -1207,8 +1308,8 @@ function candidateLists(index: StyleIndex, el: Element): IndexedRule[][] {
     if (list) lists.push(list);
   };
   const facts = factsOf(el);
-  if (facts.id) add(index.byId.get(facts.id));
-  for (const cls of facts.classes) add(index.byClass.get(cls));
+  if (facts.id) add(index.byId.get(asciiLower(facts.id)));
+  for (const cls of new Set([...facts.classes].map(asciiLower))) add(index.byClass.get(cls));
   add(index.byTag.get(facts.tag));
   if (index.byAttr.size > 0) {
     const names = new Set<string>();

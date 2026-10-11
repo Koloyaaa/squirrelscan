@@ -54,6 +54,13 @@ export interface CssDeclaration {
   /** Lower-cased value with any `!important` removed. */
   value: string;
   important: boolean;
+  /**
+   * The property and value as written (comments replaced when asked), for a
+   * reader that must match a browser exactly: `trim()` and `toLowerCase()`
+   * above are Unicode-aware, CSS whitespace and keywords are ASCII only.
+   */
+  rawProp: string;
+  rawValue: string;
 }
 
 /**
@@ -65,7 +72,7 @@ export interface CssDeclaration {
  */
 export function scanDeclarations(
   css: string,
-  options: { stripComments?: boolean } = {},
+  options: { strict?: boolean } = {},
 ): CssDeclaration[] {
   const decls: CssDeclaration[] = [];
   let i = 0;
@@ -76,7 +83,7 @@ export function scanDeclarations(
     let chunk = css.slice(chunkStart, end);
     // Off by default: content/hidden-text has always read the raw chunk. A
     // comment separates tokens, so it becomes a space: `n/**/one` is not `none`.
-    if (options.stripComments) chunk = replaceComments(chunk, " ");
+    if (options.strict) chunk = replaceComments(chunk, " ");
     let colon = -1;
     let d = 0;
     for (let k = 0; k < chunk.length; k++) {
@@ -89,7 +96,8 @@ export function scanDeclarations(
       }
     }
     if (colon === -1) return;
-    const prop = chunk.slice(0, colon).trim().toLowerCase();
+    const rawProp = chunk.slice(0, colon);
+    const prop = rawProp.trim().toLowerCase();
     if (!prop) return;
     const raw = chunk.slice(colon + 1);
     const value = raw
@@ -97,11 +105,17 @@ export function scanDeclarations(
       .trim()
       .toLowerCase();
     if (!value) return;
-    decls.push({ prop, value, important: /!\s*important/i.test(raw) });
+    decls.push({ prop, value, important: /!\s*important/i.test(raw), rawProp, rawValue: raw });
   };
 
   while (i < css.length) {
     const ch = css[i];
+    // With strict, an escaped character (`\;`, `\)`) is part of a token, never
+    // structure, as in a browser.
+    if (ch === "\\" && options.strict) {
+      i += 2;
+      continue;
+    }
     if (ch === '"' || ch === "'") {
       i = skipString(css, i);
       continue;
@@ -171,6 +185,9 @@ export function parseRules(
   // Parentheses open in the current prelude: with strictPreludes, a `;` inside
   // them (`@supports (not (display:flex;gap:1em))`) does not end the prelude.
   let parens = 0;
+  // Whether the current prelude opens with `@`, read at its first character
+  // that is not whitespace or a comment, so no prelude is ever re-scanned.
+  let preludeKind: "" | "at" | "other" = "";
   const atRules: string[] = [];
   // Copied once per nesting state, not once per rule: a deep stack of at-rules
   // around thousands of rules would otherwise copy the stack for each.
@@ -183,6 +200,13 @@ export function parseRules(
       i = skipComment(css, i);
       continue;
     }
+    if (preludeKind === "" && !/[\t\n\f\r ]/.test(ch)) preludeKind = ch === "@" ? "at" : "other";
+    // With strictPreludes, an escaped character (`.a\}b`, `content:\}`) is part
+    // of a token, never structure.
+    if (ch === "\\" && options.strictPreludes) {
+      i += 2;
+      continue;
+    }
     if (ch === '"' || ch === "'") {
       i = skipString(css, i);
       continue;
@@ -190,20 +214,29 @@ export function parseRules(
     if (ch === "(") parens++;
     else if (ch === ")" && parens > 0) parens--;
     // A statement at-rule (`@import url(…);`) or a stray semicolon: whatever
-    // came before it was not a selector.
+    // came before it was not a selector. With strictPreludes, a `;` that ends
+    // no at-rule stays in the next rule's prelude, as in a browser, where it
+    // makes the selector invalid and drops the rule (`; .b { … }`).
     if (ch === ";" && !(options.strictPreludes && parens > 0)) {
       i++;
-      preludeStart = i;
+      if (!options.strictPreludes || preludeKind === "at") {
+        preludeStart = i;
+        preludeKind = "";
+      }
       parens = 0;
       continue;
     }
     if (ch === "}") {
+      i++;
       if (atRules.length > 0) {
         atRules.pop();
         snapshot = null;
+      } else if (options.strictPreludes) {
+        // A stray `}` outside any block likewise stays in the next prelude.
+        continue;
       }
-      i++;
       preludeStart = i;
+      preludeKind = "";
       parens = 0;
       continue;
     }
@@ -212,6 +245,7 @@ export function parseRules(
       continue;
     }
     parens = 0;
+    preludeKind = "";
 
     const prelude = css.slice(preludeStart, i).trim();
     // Off by default: content/hidden-text has always read the raw prelude. A
@@ -235,6 +269,10 @@ export function parseRules(
     let j = bodyStart;
     while (j < css.length && depth > 0) {
       const c = css[j];
+      if (c === "\\" && options.strictPreludes) {
+        j += 2;
+        continue;
+      }
       if (c === "/" && css[j + 1] === "*") {
         j = skipComment(css, j);
         continue;

@@ -572,8 +572,175 @@ describe("static-hidden: hostile stylesheets degrade to unknown, never throw or 
     }
   });
 
+  test("a flood of stray `;` or `}` stays linear and never hides", () => {
+    for (const junk of [";", "}"]) {
+      const sheet = `${junk.repeat(500_000)}b{display:none}`;
+      expect(boundedVerdict('<b id="t"></b>', `<style>${sheet}</style>`)).not.toBe("hidden");
+    }
+  });
+
   test("thousands of <style> elements", () => {
     const styles = "<style>.q{color:red}</style>".repeat(5_000);
     expect(boundedVerdict('<b id="t"></b>', styles)).toBe("unknown:truncated");
+  });
+});
+
+/**
+ * Parser differentials: CSS a browser does NOT apply (or applies differently)
+ * must never read as "hidden" here. `browser` is what a browser renders for
+ * `#t`; the check may be more cautious (unknown) or miss a hide (shown), but
+ * a "hidden" it reports has to be one a browser agrees with.
+ */
+const DIFFERENTIALS: Array<{
+  name: string;
+  css: string;
+  body?: string;
+  browser: "hidden" | "shown";
+}> = [
+  // Comments split tokens.
+  { name: "comment inside a property name", css: "b{dis/**/play:none}", browser: "shown" },
+  { name: "comment inside a keyword", css: "b{display:no/**/ne}", browser: "shown" },
+  { name: "comment before the value", css: "b{display:/*x*/none}", browser: "hidden" },
+  {
+    name: "unterminated comment swallows the declaration",
+    css: "b{/* display:none}",
+    browser: "shown",
+  },
+  {
+    name: "unterminated comment after the declaration",
+    css: "b{display:none /* tail",
+    browser: "hidden",
+  },
+  // Strings and url().
+  { name: "`;` inside a string", css: 'b{content:"a;display:none"}', browser: "shown" },
+  {
+    name: "`}` inside a string, then a real declaration",
+    css: 'b{content:"}";display:none}',
+    browser: "hidden",
+  },
+  {
+    name: "escaped quote keeps the string open",
+    css: 'b{content:"\\";display:none"}',
+    browser: "shown",
+  },
+  {
+    name: "escaped newline continues the string",
+    css: 'b{content:"a\\\n;display:none"}',
+    browser: "shown",
+  },
+  { name: "unterminated string in a selector", css: 'b[x="a{display:none}', browser: "shown" },
+  {
+    name: "`;` inside an unquoted url()",
+    css: "b{background:url(x;display:none)}",
+    browser: "shown",
+  },
+  {
+    name: "`)` and `;` inside a quoted url()",
+    css: 'b{background:url(");display:none");}',
+    browser: "shown",
+  },
+  // Escapes.
+  {
+    name: "escaped `;` is not a separator",
+    css: 'b{content:"x"\\;display:none}',
+    browser: "shown",
+  },
+  {
+    name: "escaped `}` does not close the block",
+    css: "a{content:\\} b{display:none}",
+    browser: "shown",
+  },
+  { name: "escaped `{` does not open one", css: "b\\{display:none}", browser: "shown" },
+  { name: "IE hack escape in the value", css: "b{display:none\\9}", browser: "shown" },
+  {
+    name: "escape spelling the property (a browser reads `display`)",
+    css: "b{dis\\play:none}",
+    browser: "hidden",
+  },
+  // !important.
+  { name: "spaced !important", css: "b{display:none ! important}", browser: "hidden" },
+  { name: "upper-case !IMPORTANT", css: "b{display:none!IMPORTANT}", browser: "hidden" },
+  { name: "!important twice", css: "b{display:none !important !important}", browser: "shown" },
+  { name: "!important before the keyword", css: "b{display:!important none}", browser: "shown" },
+  { name: "!ie hack", css: "b{display:none !ie}", browser: "shown" },
+  // Names and keywords.
+  { name: "upper-case property and keyword", css: "B{DISPLAY:NONE}", browser: "hidden" },
+  { name: "vendor-prefixed property", css: "b{-webkit-display:none}", browser: "shown" },
+  { name: "custom property", css: "b{--display:none}", browser: "shown" },
+  { name: "no-break space before the keyword", css: "b{display: none}", browser: "shown" },
+  { name: "no-break space before the property", css: "b{ display:none}", browser: "shown" },
+  {
+    name: "Kelvin sign is not an ASCII k",
+    css: "b{display:none}b{display:blocK}",
+    browser: "hidden",
+  },
+  // At-rules and top-level tokens.
+  { name: "@import with a block", css: '@import "x" { b{display:none} }', browser: "shown" },
+  { name: "@charset with a block", css: '@charset "utf-8" { b{display:none} }', browser: "shown" },
+  { name: "unknown at-rule", css: "@foo { b{display:none} }", browser: "shown" },
+  {
+    name: "@import ending in `;` inside url()",
+    css: "@import url(a;b); b{display:none}",
+    browser: "hidden",
+  },
+  { name: "@media without a block", css: "@media screen; b{display:none}", browser: "hidden" },
+  { name: "@media not all", css: "@media not all { b{display:none} }", browser: "shown" },
+  {
+    name: "@media of an unknown type",
+    css: "@media garbage { b{display:none} }",
+    browser: "shown",
+  },
+  { name: "stray `;` before a rule", css: "; b{display:none}", browser: "shown" },
+  { name: "stray `}` before a rule", css: "} b{display:none}", browser: "shown" },
+  {
+    name: "CDO/CDC around a rule (ignored at top level)",
+    css: "<!-- b{display:none} -->",
+    browser: "hidden",
+  },
+  { name: "CDO inside a block", css: "b{<!--display:none}", browser: "shown" },
+  // Selectors.
+  { name: "trailing comma in the list", css: "b,{display:none}", browser: "shown" },
+  { name: "invalid argument to :not()", css: "b:not(::x){display:none}", browser: "shown" },
+  {
+    name: "HTML compares type= case-insensitively",
+    css: 'input:not([type="BUTTON"]){display:none}',
+    body: '<input id="t" type="button">',
+    browser: "shown",
+  },
+  // HTML parsing ends <style> at `</style>`, even inside a CSS string.
+  {
+    name: "`</style>` inside a string",
+    css: 'a{content:"</style><style>b{display:none}"}',
+    browser: "hidden",
+  },
+];
+
+describe("static-hidden: parser differentials never read as hidden what a browser shows", () => {
+  for (const { name, css, body, browser } of DIFFERENTIALS) {
+    test(`${name} (a browser: ${browser})`, () => {
+      const seen = verdict(body ?? '<b id="t"></b>', `<style>${css}</style>`);
+      if (browser === "shown") expect(seen).not.toBe("hidden");
+      expect(["hidden", "shown"].includes(seen) || seen.startsWith("unknown:")).toBe(true);
+    });
+  }
+
+  test("quirks mode: class and id selectors ignore ASCII case", () => {
+    const quirks = (head: string): string => {
+      const { document } = parseHTML(
+        `<html><head>${head}</head><body><b id="t" class="x"></b></body></html>`,
+      );
+      expect(document.doctype).toBeFalsy();
+      const seen = createStaticVisibility(document, { ariaHidden: false }).visibility(
+        document.querySelector("#t") as unknown as Element,
+      );
+      return seen.state;
+    };
+    // `.X` matches class="x" in quirks mode, so :not(.X) does not.
+    expect(quirks("<style>b:not(.X){display:none}</style>")).not.toBe("hidden");
+    expect(quirks("<style>.X{display:none}</style>")).toBe("hidden");
+    // In standards mode the case matters.
+    expect(verdict('<b id="t" class="x"></b>', "<style>b:not(.X){display:none}</style>")).toBe(
+      "hidden",
+    );
   });
 });
