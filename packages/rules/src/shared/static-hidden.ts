@@ -22,7 +22,7 @@ import type { Document } from "linkedom";
 
 import { getAttrCI, hasAttrCI } from "@squirrelscan/utils";
 
-import { parseRules, replaceComments, scanDeclarations, skipComment, skipString } from "./css-scan";
+import { parseRules, replaceComments, scanDeclarations, skipString } from "./css-scan";
 
 /** Why a static read cannot settle whether an element is hidden. */
 export type UnknownReason = "conditional" | "interactive" | "selector" | "value" | "truncated";
@@ -61,17 +61,14 @@ const MAX_STYLE_RULES = 20_000;
 const MAX_COMPOUNDS = 16;
 /** Nesting of `:not()` / `:is()` arguments; deeper ones are not parsed. */
 const MAX_SELECTOR_NESTING = 4;
+/** Arguments of one `:not()` / `:is()`; a longer list is not evaluated. */
+const MAX_PSEUDO_ARGS = 32;
 /** Longer selectors are read loosely instead of parsed. */
 const MAX_SELECTOR_CHARS = 4_096;
 /** Selectors kept in the index for one page; past this the index counts as cut short. */
 const MAX_INDEXED_SELECTORS = 50_000;
 /** `<style>` elements read per page; past this the index counts as cut short. */
 const MAX_STYLE_ELEMENTS = 1_000;
-/**
- * Levels of CSS nesting (`.a { &.b { @media … { … } } }`) read as rules. A
- * block nested deeper still counts, as a rule that may apply.
- */
-const MAX_NESTING = 3;
 /** Compound tests for one selector against one element, bounding descendant backtracking. */
 const MATCH_STEP_BUDGET = 2_000;
 /**
@@ -333,7 +330,9 @@ function compareSpecificity(a: Specificity, b: Specificity): number {
 /** Parses `:not(.a, [b])`-style arguments: a list of compounds, no combinators. */
 function parseCompoundList(text: string, depth: number): Compound[] | null {
   const out: Compound[] = [];
-  for (const part of splitSelectorList(text)) {
+  const parts = splitSelectorList(text);
+  if (parts.length > MAX_PSEUDO_ARGS) return null;
+  for (const part of parts) {
     if (part === "") return null;
     let parsed: ParsedSelector;
     try {
@@ -587,12 +586,26 @@ function matchAttr(el: Element, test: AttrTest): boolean {
   }
 }
 
-function matchPseudo(el: Element, pseudo: PseudoTest): Match {
+class MatchBudgetError extends Error {}
+
+/** Thrown when the page's whole step budget is spent. */
+class PageBudgetError extends Error {}
+
+/**
+ * Compound tests left: for this one match, and for the page. Every compound
+ * test spends one, `:not()` / `:is()` arguments included.
+ */
+interface StepBudget {
+  match: number;
+  page: { steps: number };
+}
+
+function matchPseudo(el: Element, pseudo: PseudoTest, budget: StepBudget): Match {
   switch (pseudo.kind) {
     case "not": {
       let result: Match = true;
       for (const arg of pseudo.args) {
-        const m = matchCompound(el, arg);
+        const m = matchCompound(el, arg, budget);
         if (m === true) return false;
         if (m !== false) result = m;
       }
@@ -601,7 +614,7 @@ function matchPseudo(el: Element, pseudo: PseudoTest): Match {
     case "is": {
       let result: Match = false;
       for (const arg of pseudo.args) {
-        const m = matchCompound(el, arg);
+        const m = matchCompound(el, arg, budget);
         if (m === true) return true;
         if (m !== false) result = m;
       }
@@ -624,7 +637,9 @@ function matchPseudo(el: Element, pseudo: PseudoTest): Match {
   }
 }
 
-function matchCompound(el: Element, compound: Compound): Match {
+function matchCompound(el: Element, compound: Compound, budget: StepBudget): Match {
+  if (--budget.page.steps < 0) throw new PageBudgetError();
+  if (--budget.match < 0) throw new MatchBudgetError();
   const facts = factsOf(el);
   if (compound.tag !== null && facts.tag !== compound.tag) return false;
   for (const id of compound.ids) if (facts.id !== id) return false;
@@ -632,29 +647,15 @@ function matchCompound(el: Element, compound: Compound): Match {
   for (const attr of compound.attrs) if (!matchAttr(el, attr)) return false;
   let result: Match = true;
   for (const pseudo of compound.pseudos) {
-    result = and(result, matchPseudo(el, pseudo));
+    result = and(result, matchPseudo(el, pseudo, budget));
     if (result === false) return false;
   }
   return result;
 }
 
-class MatchBudgetError extends Error {}
-
-/** Thrown when the page's whole step budget is spent. */
-class PageBudgetError extends Error {}
-
-interface StepBudget {
-  /** Steps left for this one match. */
-  match: number;
-  /** Steps left for the page, shared by every match. */
-  page: { steps: number };
-}
-
 /** Right-to-left match of compounds[0..index] ending at `el`. */
 function matchFrom(sel: ComplexSelector, index: number, el: Element, budget: StepBudget): Match {
-  if (--budget.page.steps < 0) throw new PageBudgetError();
-  if (--budget.match < 0) throw new MatchBudgetError();
-  const own = matchCompound(el, sel.compounds[index]);
+  const own = matchCompound(el, sel.compounds[index], budget);
   if (own === false || index === 0) return own;
 
   const combinator = sel.combinators[index - 1];
@@ -677,9 +678,13 @@ function matchFrom(sel: ComplexSelector, index: number, el: Element, budget: Ste
   return and(own, rest);
 }
 
-function matchSelector(sel: ComplexSelector, el: Element, page: { steps: number }): Match {
+/** Matches a parsed selector, or an unparsed rule's loose subject (`sel` null: "may apply" at best). */
+function matchRule(rule: IndexedRule, el: Element, page: { steps: number }): Match {
+  const budget: StepBudget = { match: MATCH_STEP_BUDGET, page };
   try {
-    return matchFrom(sel, sel.compounds.length - 1, el, { match: MATCH_STEP_BUDGET, page });
+    if (rule.selector)
+      return matchFrom(rule.selector, rule.selector.compounds.length - 1, el, budget);
+    return matchCompound(el, rule.subject, budget) === false ? false : "selector";
   } catch (err) {
     if (err instanceof MatchBudgetError) return "selector";
     throw err;
@@ -947,8 +952,12 @@ interface StyleIndex {
   /** Keyed by lower-cased attribute name, for subjects such as `[hidden]`. */
   byAttr: Map<string, IndexedRule[]>;
   universal: IndexedRule[];
-  /** The text or rule budget ran out, so rules past it were never read. */
-  truncated: boolean;
+  /**
+   * Set when the index cannot settle any CSS verdict on the page: a budget
+   * ran out, so rules past it were never read ("truncated"), or the page uses
+   * CSS nesting to set display or visibility ("selector").
+   */
+  unsettled: UnknownReason | null;
 }
 
 function addToIndex(index: StyleIndex, rule: IndexedRule): void {
@@ -1071,114 +1080,20 @@ function blockWinners(body: string, order: number): Decl[] {
   }));
 }
 
-/** A run of declarations, or a nested block (a rule or an at-rule) with its prelude. */
-type BodySegment =
-  | { kind: "decls"; text: string }
-  | { kind: "block"; prelude: string; body: string };
-
-/** Index of the `}` that closes the block opened at `open`, or the end of input. */
-function blockEnd(css: string, open: number): number {
-  let depth = 0;
-  let i = open;
-  while (i < css.length) {
-    const c = css[i];
-    if (c === '"' || c === "'") {
-      i = skipString(css, i);
-      continue;
-    }
-    if (c === "/" && css[i + 1] === "*") {
-      i = skipComment(css, i);
-      continue;
-    }
-    if (c === "{") depth++;
-    else if (c === "}" && --depth === 0) return i;
-    i++;
-  }
-  return css.length;
-}
-
-/**
- * The top level of a rule body in source order: runs of declarations, and the
- * nested blocks between them (`&.open { … }`, `@media … { … }`). One linear
- * pass: strings and comments are skipped, and each nested block is walked once.
- */
-function splitBody(body: string): BodySegment[] {
-  const segments: BodySegment[] = [];
-  let statementStart = 0;
-  let declStart = 0;
-  let i = 0;
-  while (i < body.length) {
-    const c = body[i];
-    if (c === '"' || c === "'") {
-      i = skipString(body, i);
-      continue;
-    }
-    if (c === "/" && body[i + 1] === "*") {
-      i = skipComment(body, i);
-      continue;
-    }
-    if (c === ";" || c === "}") {
-      i++;
-      statementStart = i;
-      continue;
-    }
-    if (c !== "{") {
-      i++;
-      continue;
-    }
-    if (statementStart > declStart) {
-      segments.push({ kind: "decls", text: body.slice(declStart, statementStart) });
-    }
-    const end = blockEnd(body, i);
-    segments.push({
-      kind: "block",
-      prelude: body.slice(statementStart, i).trim(),
-      body: body.slice(i + 1, end),
-    });
-    i = end + 1;
-    statementStart = i;
-    declStart = i;
-  }
-  if (declStart < body.length) segments.push({ kind: "decls", text: body.slice(declStart) });
-  return segments;
-}
-
-/** Shared by every rule of one page's index. */
-interface BuildState {
-  index: StyleIndex;
-  /** Source order, one step per declaration run, so nested rules keep their place. */
-  order: number;
-  /** Selectors left before the index counts as cut short. */
-  selectors: number;
-}
-
-/** Where a declaration run sits: its conditions and whether the cascade there is modelled. */
-interface Scope {
-  condition: Exclude<Condition, "never">;
-  /** False inside @layer or @scope, whose cascade is not modelled. */
-  cascadeKnown: boolean;
-}
-
-/** A selector list, parsed, with the `:is()` text nested rules substitute for `&`. */
+/** A selector list, parsed. */
 interface SelectorScope {
   entries: Array<{ selector: ComplexSelector | null; subject: Compound }>;
   /** One selector in the list is invalid, so a browser may drop all of them. */
   listInvalid: boolean;
-  /** `:is(<list>)`, or null when that would be longer than a selector is read. */
-  parentText: string | null;
   /** The list held more selectors than the index had room for. */
   cut: boolean;
 }
-
-/** Composed nested-selector text built for one nested prelude. */
-const MAX_COMPOSED_CHARS = 64 * MAX_SELECTOR_CHARS;
 
 /** Parses at most `limit` selectors of a list; `cut` says when there were more. */
 function parseSelectorScope(list: string, limit: number): SelectorScope {
   const entries: SelectorScope["entries"] = [];
   let listInvalid = false;
-  const stripped = stripSelectorComments(list);
-  const texts = splitSelectorList(stripped);
+  const texts = splitSelectorList(stripSelectorComments(list));
   const cut = texts.length > limit;
   for (const selectorText of cut ? texts.slice(0, Math.max(limit, 0)) : texts) {
     if (selectorText === "") {
@@ -1199,135 +1114,7 @@ function parseSelectorScope(list: string, limit: number): SelectorScope {
       entries.push({ selector: null, subject: looseSubject(selectorText) });
     }
   }
-  const parentText = stripped.length + 5 <= MAX_SELECTOR_CHARS ? `:is(${stripped})` : null;
-  return { entries, listInvalid, parentText, cut };
-}
-
-/**
- * A nested rule's selector list as the flat list CSS nesting means: `&` stands
- * for `:is(<parent list>)`, and a selector without `&` is a descendant of the
- * parent. The length is checked before any string is built: a parent repeated
- * through many `&` would otherwise grow without bound.
- */
-function nestedSelectorScope(prelude: string, parent: SelectorScope, limit: number): SelectorScope {
-  const parts: string[] = [];
-  const loose: SelectorScope["entries"] = [];
-  const texts = splitSelectorList(stripSelectorComments(prelude));
-  let cut = texts.length > limit;
-  let composed = 0;
-  for (const sel of cut ? texts.slice(0, Math.max(limit, 0)) : texts) {
-    if (sel === "") {
-      parts.push("");
-      continue;
-    }
-    const amps = sel.split("&").length - 1;
-    const length = sel.length + Math.max(amps, 1) * ((parent.parentText?.length ?? Infinity) + 1);
-    if (parent.parentText === null || length > MAX_SELECTOR_CHARS) {
-      // Too long to compose: keep what the nested selector says about the element.
-      loose.push({ selector: null, subject: looseSubject(sel.replaceAll("&", "")) });
-      continue;
-    }
-    composed += length;
-    if (composed > MAX_COMPOSED_CHARS) {
-      cut = true;
-      break;
-    }
-    parts.push(amps > 0 ? sel.replaceAll("&", parent.parentText) : `${parent.parentText} ${sel}`);
-  }
-  const scope: SelectorScope =
-    parts.length > 0
-      ? parseSelectorScope(parts.join(","), limit)
-      : { entries: [], listInvalid: false, parentText: null, cut: false };
-  for (const entry of loose) scope.entries.push(entry);
-  scope.cut ||= cut;
-  scope.listInvalid ||= loose.length > 0 || parent.listInvalid;
-  // A list with a part that could not be composed has no exact `:is()` form.
-  if (loose.length > 0) scope.parentText = null;
-  return scope;
-}
-
-function indexEntries(
-  state: BuildState,
-  selectors: SelectorScope,
-  decls: Decl[],
-  scope: Scope,
-): void {
-  if (selectors.cut) state.index.truncated = true;
-  for (const { selector, subject } of selectors.entries) {
-    if (--state.selectors < 0) {
-      state.index.truncated = true;
-      return;
-    }
-    const specificity = scope.cascadeKnown ? (selector?.specificity ?? null) : null;
-    addToIndex(state.index, {
-      selector,
-      subject,
-      decls: decls.map((d) => ({ ...d, specificity })),
-      condition: scope.condition,
-      approx: selectors.listInvalid ? "selector" : null,
-    });
-  }
-}
-
-function narrowScope(scope: Scope, prelude: string): Scope | null {
-  const condition = combineConditions([scope.condition, atRuleCondition(prelude)]);
-  if (condition === "never") return null;
-  return {
-    condition,
-    cascadeKnown:
-      scope.cascadeKnown && /^@(?:-[a-z]+-)?(?:media|supports|container)\b/i.test(prelude),
-  };
-}
-
-/**
- * Indexes one rule body against its selectors, nested rules included, keeping
- * source order: a declaration after a nested rule beats it, as in a browser.
- */
-function indexRuleBody(
-  state: BuildState,
-  selectors: SelectorScope,
-  body: string,
-  scope: Scope,
-  depth: number,
-): void {
-  if (!HIDING_PROPERTY.test(body)) return;
-  if (!body.includes("{")) {
-    const decls = blockWinners(body, ++state.order);
-    if (decls.length > 0) indexEntries(state, selectors, decls, scope);
-    return;
-  }
-  for (const segment of splitBody(body)) {
-    if (state.index.truncated) return;
-    if (segment.kind === "decls") {
-      const decls = blockWinners(segment.text, ++state.order);
-      if (decls.length > 0) indexEntries(state, selectors, decls, scope);
-      continue;
-    }
-    if (!HIDING_PROPERTY.test(segment.body)) continue;
-    if (depth >= MAX_NESTING) {
-      // Too deep to read as rules: every declaration in it, however deeply
-      // nested, only may apply, to the parent's elements and so their subtree.
-      const decls = blockWinners(segment.body.replace(/[{}]/g, ";"), ++state.order);
-      const loose = { ...selectors, listInvalid: true };
-      if (decls.length > 0)
-        indexEntries(state, loose, decls, { ...scope, condition: "conditional" });
-      continue;
-    }
-    const prelude = stripPreludeComments(segment.prelude);
-    if (prelude.startsWith("@")) {
-      // Declarations straight inside a nested at-rule style the parent.
-      const narrowed = narrowScope(scope, prelude);
-      if (narrowed) indexRuleBody(state, selectors, segment.body, narrowed, depth + 1);
-    } else {
-      indexRuleBody(
-        state,
-        nestedSelectorScope(segment.prelude, selectors, state.selectors),
-        segment.body,
-        scope,
-        depth + 1,
-      );
-    }
-  }
+  return { entries, listInvalid, cut };
 }
 
 function buildStyleIndex(doc: Document): StyleIndex {
@@ -1337,17 +1124,18 @@ function buildStyleIndex(doc: Document): StyleIndex {
     byTag: new Map(),
     byAttr: new Map(),
     universal: [],
-    truncated: false,
+    unsettled: null,
   };
-  const state: BuildState = { index, order: 0, selectors: MAX_INDEXED_SELECTORS };
   let budget = MAX_STYLE_CHARS;
   let ruleBudget = MAX_STYLE_RULES;
+  let selectorBudget = MAX_INDEXED_SELECTORS;
   let styleElements = 0;
+  let order = 0;
 
   try {
     for (const style of doc.querySelectorAll("style") as Iterable<Element>) {
       if (budget <= 0 || ruleBudget <= 0 || ++styleElements > MAX_STYLE_ELEMENTS) {
-        index.truncated = true;
+        index.unsettled = "truncated";
         break;
       }
       const elementCondition = styleElementCondition(style);
@@ -1357,8 +1145,15 @@ function buildStyleIndex(doc: Document): StyleIndex {
 
       for (const rule of parseRules(text, ruleBudget)) {
         ruleBudget--;
-        if (index.truncated) break;
+        order++;
         if (!HIDING_PROPERTY.test(rule.body)) continue;
+        // CSS nesting (`.panel { &.open { display:block } }`) is not read. A
+        // nested rule that sets display or visibility may reveal or hide any
+        // control, so every CSS verdict on the page is left unsettled.
+        if (rule.body.includes("{")) {
+          index.unsettled = "selector";
+          return index;
+        }
         const preludes = rule.atRules.map(stripPreludeComments);
         const condition = combineConditions([
           elementCondition,
@@ -1367,30 +1162,41 @@ function buildStyleIndex(doc: Document): StyleIndex {
           rule.atDepth > rule.atRules.length ? "conditional" : "always",
         ]);
         if (condition === "never") continue;
-        const scope: Scope = {
-          condition,
-          cascadeKnown:
-            rule.atDepth === rule.atRules.length &&
-            preludes.every((p) => /^@(?:-[a-z]+-)?(?:media|supports|container)\b/i.test(p)),
-        };
-        indexRuleBody(
-          state,
-          parseSelectorScope(rule.selector, state.selectors),
-          rule.body,
-          scope,
-          0,
-        );
+        const decls = blockWinners(rule.body, order);
+        if (decls.length === 0) continue;
+        // Inside @layer or @scope the cascade is not modelled: a matching rule
+        // there may beat any other, whatever its specificity.
+        const cascadeKnown =
+          rule.atDepth === rule.atRules.length &&
+          preludes.every((p) => /^@(?:-[a-z]+-)?(?:media|supports|container)\b/i.test(p));
+
+        const scope = parseSelectorScope(rule.selector, selectorBudget);
+        for (const { selector, subject } of scope.entries) {
+          const specificity = cascadeKnown ? (selector?.specificity ?? null) : null;
+          addToIndex(index, {
+            selector,
+            subject,
+            decls: decls.map((d) => ({ ...d, specificity })),
+            condition,
+            approx: scope.listInvalid ? "selector" : null,
+          });
+        }
+        selectorBudget -= scope.entries.length;
+        if (scope.cut || selectorBudget <= 0) {
+          index.unsettled = "truncated";
+          return index;
+        }
       }
     }
   } catch (err) {
     // Hostile CSS that still trips an engine limit (call stack, string or
-    // array length) leaves the index cut short, never a thrown rule.
+    // array length) leaves every CSS verdict unsettled, never a thrown rule.
     if (!(err instanceof RangeError)) throw err;
-    index.truncated = true;
+    index.unsettled = "truncated";
   }
 
   // Conservative at the boundary: a budget spent exactly to zero reads as cut.
-  if (budget <= 0 || ruleBudget <= 0) index.truncated = true;
+  if (budget <= 0 || ruleBudget <= 0) index.unsettled ??= "truncated";
   return index;
 }
 
@@ -1416,25 +1222,21 @@ function candidateLists(index: StyleIndex, el: Element): IndexedRule[][] {
 /** Throws PageBudgetError once the page's matching budget is spent. */
 function appliedDecls(index: StyleIndex, el: Element, page: { steps: number }): AppliedDecl[] {
   const applied: AppliedDecl[] = [];
-  for (const rule of candidateLists(index, el).flat()) {
-    if (--page.steps < 0) throw new PageBudgetError();
-    // Unparsed: whether its loosely-read subject fits decides "may apply".
-    const match: Match = rule.selector
-      ? matchSelector(rule.selector, el, page)
-      : matchCompound(el, rule.subject) === false
-        ? false
-        : "selector";
-    if (match === false) continue;
-    let may: UnknownReason | null;
-    if (match !== true) may = match;
-    else if (rule.approx) may = rule.approx;
-    else if (rule.condition !== "always") may = "conditional";
-    // Certain to match, but where it ranks in the cascade is not known, so it
-    // may or may not win.
-    else if (rule.decls[0]?.specificity === null) may = "selector";
-    else may = null;
-    const variant = match === true && rule.condition === "variant";
-    for (const decl of rule.decls) applied.push({ decl, may, variant });
+  for (const list of candidateLists(index, el)) {
+    for (const rule of list) {
+      const match = matchRule(rule, el, page);
+      if (match === false) continue;
+      let may: UnknownReason | null;
+      if (match !== true) may = match;
+      else if (rule.approx) may = rule.approx;
+      else if (rule.condition !== "always") may = "conditional";
+      // Certain to match, but where it ranks in the cascade is not known, so it
+      // may or may not win.
+      else if (rule.decls[0]?.specificity === null) may = "selector";
+      else may = null;
+      const variant = match === true && rule.condition === "variant";
+      for (const decl of rule.decls) applied.push({ decl, may, variant });
+    }
   }
 
   const inline = getAttrCI(el, "style");
@@ -1624,7 +1426,7 @@ export function createStaticVisibility(
     visibility(el: Element): StaticVisibility {
       const state = stateOf(el);
       if (state.removedByMarkup) return HIDDEN;
-      if (index?.truncated) return { state: "unknown", reason: "truncated" };
+      if (index?.unsettled) return { state: "unknown", reason: index.unsettled };
       if (state.removed) return HIDDEN;
       if (state.visibility.hidden && state.visibility.unknown === null) return HIDDEN;
       const reason = state.displayUnknown ?? state.visibility.unknown;

@@ -36,8 +36,9 @@ function parseTabindex(el: Element): number | null {
  * Whether a keyboard user can Tab to the element, following axe-core: a disabled
  * form control never can, a negative tabindex takes it out of the tab order, a
  * tabindex of 0 or more puts it in, and otherwise native focusability decides.
- * Handles React's camelCase tabIndex via the CI helpers. Ancestors are checked
- * separately: `inert` by isInert, hiding by the shared static visibility check.
+ * Handles React's camelCase tabIndex via the CI helpers. Ancestors (inert,
+ * hidden) are checked separately by isOutOfFocusTree, and CSS hiding by the
+ * shared static visibility check.
  */
 function isFocusable(el: Element): boolean {
   const tag = el.tagName.toLowerCase();
@@ -49,13 +50,16 @@ function isFocusable(el: Element): boolean {
 }
 
 /**
- * Whether `inert` is set on the element itself or on any ancestor below `stop`
- * (pass null to walk to the root). It takes the whole subtree out of the tab
- * order, so nothing under it can be reached with Tab (#456).
+ * Whether `inert`, or `hidden` other than `hidden="until-found"`, removes the
+ * element from focus: set on the element itself or on any ancestor below
+ * `stop` (pass null to walk to the root). Either takes the whole subtree out of
+ * the tab order, so nothing under it can be reached with Tab (#456).
  */
-function isInert(el: Element, stop: Element | null): boolean {
+function isOutOfFocusTree(el: Element, stop: Element | null): boolean {
   for (let node: Element | null = el; node && node !== stop; node = node.parentElement) {
     if (hasAttrCI(node, "inert")) return true;
+    const hidden = getAttrCI(node, "hidden");
+    if (hidden !== null && hidden.toLowerCase() !== "until-found") return true;
   }
   return false;
 }
@@ -113,10 +117,14 @@ export const ariaHiddenFocusRule: Rule = {
     // aria-hidden is what this rule is about, so it does not count as hiding.
     const visibility = createStaticVisibility(doc, { ariaHidden: false });
 
-    /** Files a focusable element under the finding it belongs to. */
+    /**
+     * Files a focusable element under the finding it belongs to. Called only
+     * for what used to be a finding, so CSS can only clear one or make it
+     * unconfirmed, never add one.
+     */
     const classify = (el: Element, label: string): void => {
       const seen = visibility.visibility(el);
-      // display:none, visibility:hidden or the hidden attribute: not focusable.
+      // display:none or visibility:hidden from the page's CSS: not focusable.
       if (seen.state === "hidden") return;
       if (isHoneypotCandidate(el)) {
         honeypotInHidden.push(labelFor(el));
@@ -128,19 +136,19 @@ export const ariaHiddenFocusRule: Rule = {
     };
 
     for (const hidden of hiddenElements) {
-      // An inert region (or one inside an inert ancestor) has nothing a
-      // keyboard user can reach.
-      if (isInert(hidden, null)) continue;
+      // An inert or hidden region (or one inside such an ancestor) has nothing
+      // a keyboard user can reach.
+      if (isOutOfFocusTree(hidden, null)) continue;
 
       // Check if the hidden element itself is focusable
-      if (isFocusable(hidden) && visibility.visibility(hidden).state !== "hidden") {
+      if (isFocusable(hidden)) {
         classify(hidden, `${hidden.tagName.toLowerCase()} (self is focusable)`);
         continue;
       }
 
       // Check for focusable children
       for (const child of hidden.querySelectorAll("*")) {
-        if (!isFocusable(child) || isInert(child, hidden)) continue;
+        if (!isFocusable(child) || isOutOfFocusTree(child, hidden)) continue;
         classify(child, labelFor(child));
       }
     }

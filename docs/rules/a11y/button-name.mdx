@@ -34,7 +34,8 @@ Some CSS in the page cannot be settled from the markup alone. When a rule like t
 - a rule for an interaction state, such as `:hover`, `:focus`, `:focus-within`, `:target` or `:checked`;
 - a selector squirrel does not evaluate, such as `:has()` or `:nth-child()`;
 - a `display` or `visibility` set through a CSS variable;
-- inline CSS larger or more deeply nested than squirrel reads on one page.
+- CSS nesting (a rule written inside another rule) that sets `display` or `visibility`. squirrel does not read nested rules, so on such a page every finding that CSS could clear is unconfirmed;
+- inline CSS larger than squirrel reads on one page.
 
 A media query that only hides a button on some screens does not count: the button is in the accessibility tree everywhere else, so it is still a failure. A rule under `@media print` is ignored.
 

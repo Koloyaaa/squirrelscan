@@ -23,7 +23,7 @@ export function skipString(css: string, start: number): number {
 }
 
 /** Index just past a CSS comment starting at `start`, or end of input. */
-export function skipComment(css: string, start: number): number {
+function skipComment(css: string, start: number): number {
   const end = css.indexOf("*/", start + 2);
   return end === -1 ? css.length : end + 2;
 }

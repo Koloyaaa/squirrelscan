@@ -423,24 +423,21 @@ describe("static-hidden: second review round", () => {
 });
 
 describe("static-hidden: third review round", () => {
-  test("CSS nesting: a nested rule is read as the flat rule it means", () => {
+  test("CSS nesting that sets display or visibility leaves every CSS verdict unsettled", () => {
+    // Nested rules are not expanded: one that may reveal or hide anything
+    // leaves the page's CSS verdicts unknown, while markup still decides.
     const head = "<style>.panel{display:none;&.open{display:block}}</style>";
-    expect(verdict('<b id="t" class="panel open"></b>', head)).toBe("shown");
-    expect(verdict('<b id="t" class="panel"></b>', head)).toBe("hidden");
-    // Without &, a nested selector is a descendant of the parent.
+    expect(verdict('<b id="t" class="panel open"></b>', head)).toBe("unknown:selector");
+    expect(verdict('<b id="t" class="other"></b>', head)).toBe("unknown:selector");
+    expect(verdict('<div hidden><b id="t"></b></div>', head, false)).toBe("unknown:selector");
+    expect(verdict('<div aria-hidden="true"><b id="t"></b></div>', head)).toBe("hidden");
+    // Nesting that touches neither property changes nothing.
     expect(
       verdict(
-        '<div class="menu"><b id="t" class="item"></b></div>',
-        "<style>.menu{color:red;.item{display:none}}</style>",
+        '<b id="t" class="x"></b>',
+        "<style>.x{display:none}.card{&:hover{color:red}}</style>",
       ),
     ).toBe("hidden");
-    // A declaration inside a nested rule is never read as the parent's.
-    expect(
-      verdict(
-        '<b id="t" class="card"></b>',
-        "<style>.card{display:block;&:hover{color:red;display:none;margin:0}}</style>",
-      ),
-    ).toBe("unknown:interactive");
   });
 
   test("the all shorthand resets display and visibility", () => {
@@ -465,35 +462,6 @@ describe("static-hidden: third review round", () => {
         '<style>b:not([data-x="a/*x*/b"]){display:none}</style>',
       ),
     ).toBe("shown");
-  });
-});
-
-describe("static-hidden: nesting keeps source order and at-rule conditions", () => {
-  test("declarations straight inside a nested @media style the parent", () => {
-    expect(
-      verdict(
-        '<b id="t" class="panel"></b>',
-        "<style>.panel{display:none;@media (min-width:600px){display:block}}</style>",
-      ),
-    ).toBe("unknown:conditional");
-    expect(
-      verdict('<b id="t" class="panel"></b>', "<style>.panel{@media print{display:none}}</style>"),
-    ).toBe("shown");
-  });
-
-  test("a declaration after a nested rule beats it, as in a browser", () => {
-    expect(
-      verdict(
-        '<b id="t" class="panel"></b>',
-        "<style>.panel{&{display:none}display:block}</style>",
-      ),
-    ).toBe("shown");
-    expect(
-      verdict(
-        '<b id="t" class="panel"></b>',
-        "<style>.panel{display:block;&{display:none}}</style>",
-      ),
-    ).toBe("hidden");
   });
 });
 
@@ -526,12 +494,14 @@ describe("static-hidden: hostile stylesheets degrade to unknown, never throw or 
         `<style>.z{color:red}/* never closed ${tail}</style>`,
       ),
     ).toBe("shown");
-    expect(
+    // An unterminated string swallows the rest into one body, which then reads
+    // as nesting: never a hidden verdict, never a stall.
+    expect(["shown", "unknown:selector"]).toContain(
       boundedVerdict(
         '<b id="t" class="y"></b>',
         `<style>.z{content:"never closed ${tail}}</style>`,
       ),
-    ).toBe("shown");
+    );
     // Thousands of comment openers with no closer.
     expect(
       boundedVerdict('<b id="t"></b>', `<style>b{display:none}${"/*".repeat(200_000)}</style>`),
@@ -548,16 +518,40 @@ describe("static-hidden: hostile stylesheets degrade to unknown, never throw or 
     expect(boundedVerdict('<b id="t"></b>', `<style>${rules}</style>`)).toBe("unknown:selector");
   });
 
-  test("a parent selector repeated through many & is never built in full", () => {
-    const sheet = `.${"a".repeat(200_000)}{${"&".repeat(10_000)}{display:none}}`;
-    expect(["shown", "unknown:selector", "unknown:truncated"]).toContain(
-      boundedVerdict('<b id="t"></b>', `<style>${sheet}</style>`),
+  test("nested rules are never expanded: the review's 5 KB probe stays small", () => {
+    // pub#675 review: `&` used to be expanded into `:is(<parent list>)` and
+    // re-parsed, so this 5 KB sheet took 442 MiB and 11 KB took 1.6 GB.
+    const parent = Array.from({ length: 690 }, (_, n) => `.p${n}`).join(",");
+    const nested = `${Array.from({ length: 64 }, () => "&").join(",")}{display:none}`;
+    const sheet = `${parent}{${nested.repeat(2)}}`;
+    Bun.gc(true);
+    const before = process.memoryUsage.rss();
+    expect(boundedVerdict('<b id="t" class="p1"></b>', `<style>${sheet}</style>`)).toBe(
+      "unknown:selector",
     );
-    // A hundred thousand `&` in one nested list: composition stops at its budget.
-    const many = `.p{${Array.from({ length: 100_000 }, () => "&").join(",")}{display:none}}`;
-    expect(["shown", "unknown:truncated"]).toContain(
-      boundedVerdict('<b id="t"></b>', `<style>${many}</style>`),
-    );
+    expect(process.memoryUsage.rss() - before).toBeLessThan(64 * 1024 * 1024);
+    const long = `.${"a".repeat(200_000)}{${"&".repeat(10_000)}{display:none}}`;
+    expect(boundedVerdict('<b id="t"></b>', `<style>${long}</style>`)).toBe("unknown:selector");
+  });
+
+  test("long :is() and :not() argument lists spend the step budget", () => {
+    // pub#675 review: about 1 MB of `:is(.a0,…,.a689){display:none}` against
+    // 3,000 buttons took 9.9 s, because argument tests were never counted.
+    const args = Array.from({ length: 690 }, (_, n) => `.a${n}`).join(",");
+    for (const pseudo of ["is", "not"]) {
+      const sheet = `:${pseudo}(${args}){display:none}`.repeat(200);
+      const { document } = parseHTML(
+        `<!doctype html><html><head><style>${sheet}</style></head><body>${"<button></button>".repeat(3_000)}</body></html>`,
+      );
+      const resolver = createStaticVisibility(document, { ariaHidden: true });
+      const started = performance.now();
+      const states = new Set<string>();
+      for (const b of document.querySelectorAll("button")) {
+        states.add(resolver.visibility(b as unknown as Element).state);
+      }
+      expect(performance.now() - started).toBeLessThan(3_000);
+      expect([...states]).toEqual(["unknown"]);
+    }
   });
 
   test("thousands of <style> elements", () => {

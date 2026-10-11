@@ -153,11 +153,17 @@ describe("a11y/aria-hidden-focus: static CSS", () => {
     expect(check(checks, "aria-hidden-focus")?.status).toBe("fail");
   });
 
-  test("a hidden attribute overridden by an author display still fails, as in a browser", () => {
-    const checks = run(
-      fixture(`<div hidden style="display:block" aria-hidden="true"><button>b</button></div>`),
-    );
-    expect(check(checks, "aria-hidden-focus")?.status).toBe("fail");
+  test("a region under the hidden attribute is skipped as before, whatever CSS may do to it", () => {
+    // The rule only ever moves a finding to pass or to unconfirmed: the plain
+    // `hidden` skip it always had is not handed to the CSS check.
+    for (const variant of [
+      `<div hidden style="display:block" aria-hidden="true"><button>b</button></div>`,
+      `<style>.menu:hover div{display:block}</style><div class="menu"><div hidden aria-hidden="true"><button>b</button></div></div>`,
+      `<style>@media (min-width:600px){[hidden]{display:block}}</style><div hidden aria-hidden="true"><button>b</button></div>`,
+      `${"<style>.q{color:red}</style>".repeat(1_001)}<div hidden aria-hidden="true"><button>b</button></div>`,
+    ]) {
+      expect(statuses(fixture(variant))).toEqual({ "aria-hidden-focus": "pass" });
+    }
   });
 
   test("a CSS-hidden honeypot is neither an error nor a honeypot warning", () => {
