@@ -23,9 +23,28 @@ export function skipString(css: string, start: number): number {
 }
 
 /** Index just past a CSS comment starting at `start`, or end of input. */
-function skipComment(css: string, start: number): number {
+export function skipComment(css: string, start: number): number {
   const end = css.indexOf("*/", start + 2);
   return end === -1 ? css.length : end + 2;
+}
+
+/**
+ * `text` with every comment replaced by `replacement`, in one linear pass with
+ * no regex; an unterminated comment runs to the end of the text.
+ */
+export function replaceComments(text: string, replacement: string): string {
+  let at = text.indexOf("/*");
+  if (at === -1) return text;
+  let out = "";
+  let from = 0;
+  while (at !== -1) {
+    out += text.slice(from, at) + replacement;
+    const close = text.indexOf("*/", at + 2);
+    if (close === -1) return out;
+    from = close + 2;
+    at = text.indexOf("/*", from);
+  }
+  return out + text.slice(from);
 }
 
 /** One `property: value` pair from a declaration block. */
@@ -57,9 +76,7 @@ export function scanDeclarations(
     let chunk = css.slice(chunkStart, end);
     // Off by default: content/hidden-text has always read the raw chunk. A
     // comment separates tokens, so it becomes a space: `n/**/one` is not `none`.
-    if (options.stripComments && chunk.includes("/*")) {
-      chunk = chunk.replace(/\/\*[\s\S]*?(?:\*\/|$)/g, " ");
-    }
+    if (options.stripComments) chunk = replaceComments(chunk, " ");
     let colon = -1;
     let d = 0;
     for (let k = 0; k < chunk.length; k++) {

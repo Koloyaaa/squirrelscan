@@ -467,3 +467,101 @@ describe("static-hidden: third review round", () => {
     ).toBe("shown");
   });
 });
+
+describe("static-hidden: nesting keeps source order and at-rule conditions", () => {
+  test("declarations straight inside a nested @media style the parent", () => {
+    expect(
+      verdict(
+        '<b id="t" class="panel"></b>',
+        "<style>.panel{display:none;@media (min-width:600px){display:block}}</style>",
+      ),
+    ).toBe("unknown:conditional");
+    expect(
+      verdict('<b id="t" class="panel"></b>', "<style>.panel{@media print{display:none}}</style>"),
+    ).toBe("shown");
+  });
+
+  test("a declaration after a nested rule beats it, as in a browser", () => {
+    expect(
+      verdict(
+        '<b id="t" class="panel"></b>',
+        "<style>.panel{&{display:none}display:block}</style>",
+      ),
+    ).toBe("shown");
+    expect(
+      verdict(
+        '<b id="t" class="panel"></b>',
+        "<style>.panel{display:block;&{display:none}}</style>",
+      ),
+    ).toBe("hidden");
+  });
+});
+
+/** Runs `verdict` and fails if it takes longer than `ms` on this (loaded) machine. */
+function boundedVerdict(body: string, head: string, ms = 3_000): string {
+  const started = performance.now();
+  const result = verdict(body, head);
+  expect(performance.now() - started).toBeLessThan(ms);
+  return result;
+}
+
+describe("static-hidden: hostile stylesheets degrade to unknown, never throw or stall", () => {
+  test("a stylesheet far past the size budget", () => {
+    const sheet = `.x{display:none}${".f{color:red}".repeat(200_000)}`;
+    expect(boundedVerdict('<b id="t"></b>', `<style>${sheet}</style>`)).toBe("unknown:truncated");
+  });
+
+  test("hundreds of thousands of selectors in one list", () => {
+    const list = Array.from({ length: 400_000 }, () => "*").join(",");
+    expect(boundedVerdict('<b id="t"></b>', `<style>${list}{display:none}</style>`)).toBe(
+      "unknown:truncated",
+    );
+  });
+
+  test("an unterminated comment or string swallows the rest of the sheet, linearly", () => {
+    const tail = ".y{display:none}".repeat(20_000);
+    expect(
+      boundedVerdict(
+        '<b id="t" class="y"></b>',
+        `<style>.z{color:red}/* never closed ${tail}</style>`,
+      ),
+    ).toBe("shown");
+    expect(
+      boundedVerdict(
+        '<b id="t" class="y"></b>',
+        `<style>.z{content:"never closed ${tail}}</style>`,
+      ),
+    ).toBe("shown");
+    // Thousands of comment openers with no closer.
+    expect(
+      boundedVerdict('<b id="t"></b>', `<style>b{display:none}${"/*".repeat(200_000)}</style>`),
+    ).toBe("hidden");
+  });
+
+  test("deeply nested at-rules and nested rules", () => {
+    const atRules = `${"@media all{".repeat(50_000)}b{display:none}${"}".repeat(50_000)}`;
+    expect(boundedVerdict('<b id="t"></b>', `<style>${atRules}</style>`)).toBe(
+      "unknown:conditional",
+    );
+    // Nesting past the levels read as rules still counts, as a rule that may apply.
+    const rules = `b{${"&{".repeat(50_000)}display:none${"}".repeat(50_000)}}`;
+    expect(boundedVerdict('<b id="t"></b>', `<style>${rules}</style>`)).toBe("unknown:selector");
+  });
+
+  test("a parent selector repeated through many & is never built in full", () => {
+    const sheet = `.${"a".repeat(200_000)}{${"&".repeat(10_000)}{display:none}}`;
+    expect(["shown", "unknown:selector", "unknown:truncated"]).toContain(
+      boundedVerdict('<b id="t"></b>', `<style>${sheet}</style>`),
+    );
+    // A hundred thousand `&` in one nested list: composition stops at its budget.
+    const many = `.p{${Array.from({ length: 100_000 }, () => "&").join(",")}{display:none}}`;
+    expect(["shown", "unknown:truncated"]).toContain(
+      boundedVerdict('<b id="t"></b>', `<style>${many}</style>`),
+    );
+  });
+
+  test("thousands of <style> elements", () => {
+    const styles = "<style>.q{color:red}</style>".repeat(5_000);
+    expect(boundedVerdict('<b id="t"></b>', styles)).toBe("unknown:truncated");
+  });
+});

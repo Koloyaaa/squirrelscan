@@ -22,7 +22,7 @@ import type { Document } from "linkedom";
 
 import { getAttrCI, hasAttrCI } from "@squirrelscan/utils";
 
-import { parseRules, scanDeclarations, skipString } from "./css-scan";
+import { parseRules, replaceComments, scanDeclarations, skipComment, skipString } from "./css-scan";
 
 /** Why a static read cannot settle whether an element is hidden. */
 export type UnknownReason = "conditional" | "interactive" | "selector" | "value" | "truncated";
@@ -65,6 +65,13 @@ const MAX_SELECTOR_NESTING = 4;
 const MAX_SELECTOR_CHARS = 4_096;
 /** Selectors kept in the index for one page; past this the index counts as cut short. */
 const MAX_INDEXED_SELECTORS = 50_000;
+/** `<style>` elements read per page; past this the index counts as cut short. */
+const MAX_STYLE_ELEMENTS = 1_000;
+/**
+ * Levels of CSS nesting (`.a { &.b { @media … { … } } }`) read as rules. A
+ * block nested deeper still counts, as a rule that may apply.
+ */
+const MAX_NESTING = 3;
 /** Compound tests for one selector against one element, bounding descendant backtracking. */
 const MATCH_STEP_BUDGET = 2_000;
 /**
@@ -974,8 +981,6 @@ function styleElementCondition(style: Element): Condition {
   return combineConditions(conditions);
 }
 
-const CSS_COMMENT = /\/\*[\s\S]*?(?:\*\/|$)/g;
-
 /**
  * The rule scanner keeps comments that sit before or inside a selector, such as
  * the marker styled-components writes before every rule. A comment is not
@@ -1013,7 +1018,7 @@ function stripSelectorComments(text: string): string {
 
 /** In an at-rule prelude a comment separates tokens like whitespace. */
 function stripPreludeComments(text: string): string {
-  return text.includes("/*") ? text.replace(CSS_COMMENT, " ").trim() : text;
+  return replaceComments(text, " ").trim();
 }
 
 interface HidingDeclaration {
@@ -1066,58 +1071,116 @@ function blockWinners(body: string, order: number): Decl[] {
   }));
 }
 
-/**
- * The declarations of a block with any nested rules (`&.open { … }`) cut out,
- * so a declaration inside a nested rule is never read as the outer rule's.
- */
-function withoutNestedRules(body: string): string {
-  if (!body.includes("{")) return body;
-  let out = "";
-  let boundary = 0;
+/** A run of declarations, or a nested block (a rule or an at-rule) with its prelude. */
+type BodySegment =
+  | { kind: "decls"; text: string }
+  | { kind: "block"; prelude: string; body: string };
+
+/** Index of the `}` that closes the block opened at `open`, or the end of input. */
+function blockEnd(css: string, open: number): number {
   let depth = 0;
+  let i = open;
+  while (i < css.length) {
+    const c = css[i];
+    if (c === '"' || c === "'") {
+      i = skipString(css, i);
+      continue;
+    }
+    if (c === "/" && css[i + 1] === "*") {
+      i = skipComment(css, i);
+      continue;
+    }
+    if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) return i;
+    i++;
+  }
+  return css.length;
+}
+
+/**
+ * The top level of a rule body in source order: runs of declarations, and the
+ * nested blocks between them (`&.open { … }`, `@media … { … }`). One linear
+ * pass: strings and comments are skipped, and each nested block is walked once.
+ */
+function splitBody(body: string): BodySegment[] {
+  const segments: BodySegment[] = [];
+  let statementStart = 0;
+  let declStart = 0;
   let i = 0;
   while (i < body.length) {
     const c = body[i];
     if (c === '"' || c === "'") {
-      const end = skipString(body, i);
-      if (depth === 0) out += body.slice(i, end);
-      i = end;
+      i = skipString(body, i);
       continue;
     }
     if (c === "/" && body[i + 1] === "*") {
-      const close = body.indexOf("*/", i + 2);
-      i = close === -1 ? body.length : close + 2;
+      i = skipComment(body, i);
       continue;
     }
-    if (c === "{") {
-      // Drop the nested rule's selector, written since the last boundary.
-      if (depth === 0) out = out.slice(0, boundary);
-      depth++;
-    } else if (c === "}") {
-      depth = Math.max(0, depth - 1);
-      if (depth === 0) boundary = out.length;
-    } else if (depth === 0) {
-      out += c;
-      if (c === ";") boundary = out.length;
+    if (c === ";" || c === "}") {
+      i++;
+      statementStart = i;
+      continue;
     }
-    i++;
+    if (c !== "{") {
+      i++;
+      continue;
+    }
+    if (statementStart > declStart) {
+      segments.push({ kind: "decls", text: body.slice(declStart, statementStart) });
+    }
+    const end = blockEnd(body, i);
+    segments.push({
+      kind: "block",
+      prelude: body.slice(statementStart, i).trim(),
+      body: body.slice(i + 1, end),
+    });
+    i = end + 1;
+    statementStart = i;
+    declStart = i;
   }
-  return out;
+  if (declStart < body.length) segments.push({ kind: "decls", text: body.slice(declStart) });
+  return segments;
 }
 
-interface IndexContext {
+/** Shared by every rule of one page's index. */
+interface BuildState {
   index: StyleIndex;
-  condition: Exclude<Condition, "never">;
-  /** Inside @layer or @scope the cascade is not modelled. */
-  cascadeKnown: boolean;
+  /** Source order, one step per declaration run, so nested rules keep their place. */
   order: number;
+  /** Selectors left before the index counts as cut short. */
+  selectors: number;
 }
 
-/** Indexes one selector list against its winning declarations. Returns how many selectors it added. */
-function indexSelectorList(ctx: IndexContext, selectorList: string, decls: Decl[]): number {
-  const entries: Array<{ selector: ComplexSelector | null; subject: Compound }> = [];
+/** Where a declaration run sits: its conditions and whether the cascade there is modelled. */
+interface Scope {
+  condition: Exclude<Condition, "never">;
+  /** False inside @layer or @scope, whose cascade is not modelled. */
+  cascadeKnown: boolean;
+}
+
+/** A selector list, parsed, with the `:is()` text nested rules substitute for `&`. */
+interface SelectorScope {
+  entries: Array<{ selector: ComplexSelector | null; subject: Compound }>;
+  /** One selector in the list is invalid, so a browser may drop all of them. */
+  listInvalid: boolean;
+  /** `:is(<list>)`, or null when that would be longer than a selector is read. */
+  parentText: string | null;
+  /** The list held more selectors than the index had room for. */
+  cut: boolean;
+}
+
+/** Composed nested-selector text built for one nested prelude. */
+const MAX_COMPOSED_CHARS = 64 * MAX_SELECTOR_CHARS;
+
+/** Parses at most `limit` selectors of a list; `cut` says when there were more. */
+function parseSelectorScope(list: string, limit: number): SelectorScope {
+  const entries: SelectorScope["entries"] = [];
   let listInvalid = false;
-  for (const selectorText of splitSelectorList(stripSelectorComments(selectorList))) {
+  const stripped = stripSelectorComments(list);
+  const texts = splitSelectorList(stripped);
+  const cut = texts.length > limit;
+  for (const selectorText of cut ? texts.slice(0, Math.max(limit, 0)) : texts) {
     if (selectorText === "") {
       listInvalid = true;
       continue;
@@ -1136,45 +1199,135 @@ function indexSelectorList(ctx: IndexContext, selectorList: string, decls: Decl[
       entries.push({ selector: null, subject: looseSubject(selectorText) });
     }
   }
-  for (const { selector, subject } of entries) {
-    const specificity = ctx.cascadeKnown ? (selector?.specificity ?? null) : null;
-    addToIndex(ctx.index, {
-      selector,
-      subject,
-      decls: decls.map((d) => ({ ...d, specificity })),
-      condition: ctx.condition,
-      approx: listInvalid ? "selector" : null,
-    });
-  }
-  return entries.length;
+  const parentText = stripped.length + 5 <= MAX_SELECTOR_CHARS ? `:is(${stripped})` : null;
+  return { entries, listInvalid, parentText, cut };
 }
 
 /**
- * Nested rules, one level deep, rewritten as the flat rules CSS nesting means:
- * `&` stands for `:is(<parent list>)`, and a nested selector without `&` is a
- * descendant of the parent. A nested rule under an at-rule only may apply.
- * Deeper nesting stays inside the nested body, where its declarations are cut
- * out like any nested rule's.
+ * A nested rule's selector list as the flat list CSS nesting means: `&` stands
+ * for `:is(<parent list>)`, and a selector without `&` is a descendant of the
+ * parent. The length is checked before any string is built: a parent repeated
+ * through many `&` would otherwise grow without bound.
  */
-function indexNestedRules(ctx: IndexContext, parentList: string, body: string): number {
-  const parent = `:is(${stripSelectorComments(parentList)})`;
-  const nested = parseRules(body, MAX_STYLE_RULES);
-  let added = 0;
-  for (const [k, rule] of nested.entries()) {
-    if (!HIDING_PROPERTY.test(rule.body)) continue;
-    const decls = blockWinners(
-      withoutNestedRules(rule.body),
-      ctx.order + (k + 1) / (nested.length + 1),
-    );
-    if (decls.length === 0) continue;
-    const list = splitSelectorList(rule.selector)
-      .map((sel) => (sel.includes("&") ? sel.replaceAll("&", parent) : sel && `${parent} ${sel}`))
-      .join(", ");
-    const nestedCtx: IndexContext =
-      rule.atDepth > 0 ? { ...ctx, condition: "conditional", cascadeKnown: false } : ctx;
-    added += indexSelectorList(nestedCtx, list, decls);
+function nestedSelectorScope(prelude: string, parent: SelectorScope, limit: number): SelectorScope {
+  const parts: string[] = [];
+  const loose: SelectorScope["entries"] = [];
+  const texts = splitSelectorList(stripSelectorComments(prelude));
+  let cut = texts.length > limit;
+  let composed = 0;
+  for (const sel of cut ? texts.slice(0, Math.max(limit, 0)) : texts) {
+    if (sel === "") {
+      parts.push("");
+      continue;
+    }
+    const amps = sel.split("&").length - 1;
+    const length = sel.length + Math.max(amps, 1) * ((parent.parentText?.length ?? Infinity) + 1);
+    if (parent.parentText === null || length > MAX_SELECTOR_CHARS) {
+      // Too long to compose: keep what the nested selector says about the element.
+      loose.push({ selector: null, subject: looseSubject(sel.replaceAll("&", "")) });
+      continue;
+    }
+    composed += length;
+    if (composed > MAX_COMPOSED_CHARS) {
+      cut = true;
+      break;
+    }
+    parts.push(amps > 0 ? sel.replaceAll("&", parent.parentText) : `${parent.parentText} ${sel}`);
   }
-  return added;
+  const scope: SelectorScope =
+    parts.length > 0
+      ? parseSelectorScope(parts.join(","), limit)
+      : { entries: [], listInvalid: false, parentText: null, cut: false };
+  for (const entry of loose) scope.entries.push(entry);
+  scope.cut ||= cut;
+  scope.listInvalid ||= loose.length > 0 || parent.listInvalid;
+  // A list with a part that could not be composed has no exact `:is()` form.
+  if (loose.length > 0) scope.parentText = null;
+  return scope;
+}
+
+function indexEntries(
+  state: BuildState,
+  selectors: SelectorScope,
+  decls: Decl[],
+  scope: Scope,
+): void {
+  if (selectors.cut) state.index.truncated = true;
+  for (const { selector, subject } of selectors.entries) {
+    if (--state.selectors < 0) {
+      state.index.truncated = true;
+      return;
+    }
+    const specificity = scope.cascadeKnown ? (selector?.specificity ?? null) : null;
+    addToIndex(state.index, {
+      selector,
+      subject,
+      decls: decls.map((d) => ({ ...d, specificity })),
+      condition: scope.condition,
+      approx: selectors.listInvalid ? "selector" : null,
+    });
+  }
+}
+
+function narrowScope(scope: Scope, prelude: string): Scope | null {
+  const condition = combineConditions([scope.condition, atRuleCondition(prelude)]);
+  if (condition === "never") return null;
+  return {
+    condition,
+    cascadeKnown:
+      scope.cascadeKnown && /^@(?:-[a-z]+-)?(?:media|supports|container)\b/i.test(prelude),
+  };
+}
+
+/**
+ * Indexes one rule body against its selectors, nested rules included, keeping
+ * source order: a declaration after a nested rule beats it, as in a browser.
+ */
+function indexRuleBody(
+  state: BuildState,
+  selectors: SelectorScope,
+  body: string,
+  scope: Scope,
+  depth: number,
+): void {
+  if (!HIDING_PROPERTY.test(body)) return;
+  if (!body.includes("{")) {
+    const decls = blockWinners(body, ++state.order);
+    if (decls.length > 0) indexEntries(state, selectors, decls, scope);
+    return;
+  }
+  for (const segment of splitBody(body)) {
+    if (state.index.truncated) return;
+    if (segment.kind === "decls") {
+      const decls = blockWinners(segment.text, ++state.order);
+      if (decls.length > 0) indexEntries(state, selectors, decls, scope);
+      continue;
+    }
+    if (!HIDING_PROPERTY.test(segment.body)) continue;
+    if (depth >= MAX_NESTING) {
+      // Too deep to read as rules: every declaration in it, however deeply
+      // nested, only may apply, to the parent's elements and so their subtree.
+      const decls = blockWinners(segment.body.replace(/[{}]/g, ";"), ++state.order);
+      const loose = { ...selectors, listInvalid: true };
+      if (decls.length > 0)
+        indexEntries(state, loose, decls, { ...scope, condition: "conditional" });
+      continue;
+    }
+    const prelude = stripPreludeComments(segment.prelude);
+    if (prelude.startsWith("@")) {
+      // Declarations straight inside a nested at-rule style the parent.
+      const narrowed = narrowScope(scope, prelude);
+      if (narrowed) indexRuleBody(state, selectors, segment.body, narrowed, depth + 1);
+    } else {
+      indexRuleBody(
+        state,
+        nestedSelectorScope(segment.prelude, selectors, state.selectors),
+        segment.body,
+        scope,
+        depth + 1,
+      );
+    }
+  }
 }
 
 function buildStyleIndex(doc: Document): StyleIndex {
@@ -1186,72 +1339,84 @@ function buildStyleIndex(doc: Document): StyleIndex {
     universal: [],
     truncated: false,
   };
+  const state: BuildState = { index, order: 0, selectors: MAX_INDEXED_SELECTORS };
   let budget = MAX_STYLE_CHARS;
   let ruleBudget = MAX_STYLE_RULES;
-  let order = 0;
-  let indexed = 0;
+  let styleElements = 0;
 
-  for (const style of doc.querySelectorAll("style") as Iterable<Element>) {
-    if (budget <= 0 || ruleBudget <= 0 || indexed > MAX_INDEXED_SELECTORS) break;
-    const elementCondition = styleElementCondition(style);
-    if (elementCondition === "never") continue;
-    const text = (style.textContent || "").slice(0, budget);
-    budget -= text.length;
+  try {
+    for (const style of doc.querySelectorAll("style") as Iterable<Element>) {
+      if (budget <= 0 || ruleBudget <= 0 || ++styleElements > MAX_STYLE_ELEMENTS) {
+        index.truncated = true;
+        break;
+      }
+      const elementCondition = styleElementCondition(style);
+      if (elementCondition === "never") continue;
+      const text = (style.textContent || "").slice(0, budget);
+      budget -= text.length;
 
-    for (const rule of parseRules(text, ruleBudget)) {
-      ruleBudget--;
-      order++;
-      if (indexed > MAX_INDEXED_SELECTORS) break;
-      if (!HIDING_PROPERTY.test(rule.body)) continue;
-      const condition = combineConditions([
-        elementCondition,
-        ...rule.atRules.map((prelude) => atRuleCondition(stripPreludeComments(prelude))),
-        // Nesting deeper than the scanner records is not evaluated.
-        rule.atDepth > rule.atRules.length ? "conditional" : "always",
-      ]);
-      if (condition === "never") continue;
-      const ctx: IndexContext = {
-        index,
-        condition,
-        cascadeKnown:
-          rule.atDepth === rule.atRules.length &&
-          rule.atRules.every((prelude) =>
-            /^@(?:-[a-z]+-)?(?:media|supports|container)\b/i.test(stripPreludeComments(prelude)),
-          ),
-        order,
-      };
-
-      const decls = blockWinners(withoutNestedRules(rule.body), order);
-      if (decls.length > 0) indexed += indexSelectorList(ctx, rule.selector, decls);
-      if (rule.body.includes("{")) indexed += indexNestedRules(ctx, rule.selector, rule.body);
+      for (const rule of parseRules(text, ruleBudget)) {
+        ruleBudget--;
+        if (index.truncated) break;
+        if (!HIDING_PROPERTY.test(rule.body)) continue;
+        const preludes = rule.atRules.map(stripPreludeComments);
+        const condition = combineConditions([
+          elementCondition,
+          ...preludes.map(atRuleCondition),
+          // Nesting deeper than the scanner records is not evaluated.
+          rule.atDepth > rule.atRules.length ? "conditional" : "always",
+        ]);
+        if (condition === "never") continue;
+        const scope: Scope = {
+          condition,
+          cascadeKnown:
+            rule.atDepth === rule.atRules.length &&
+            preludes.every((p) => /^@(?:-[a-z]+-)?(?:media|supports|container)\b/i.test(p)),
+        };
+        indexRuleBody(
+          state,
+          parseSelectorScope(rule.selector, state.selectors),
+          rule.body,
+          scope,
+          0,
+        );
+      }
     }
+  } catch (err) {
+    // Hostile CSS that still trips an engine limit (call stack, string or
+    // array length) leaves the index cut short, never a thrown rule.
+    if (!(err instanceof RangeError)) throw err;
+    index.truncated = true;
   }
 
   // Conservative at the boundary: a budget spent exactly to zero reads as cut.
-  index.truncated = budget <= 0 || ruleBudget <= 0 || indexed > MAX_INDEXED_SELECTORS;
+  if (budget <= 0 || ruleBudget <= 0) index.truncated = true;
   return index;
 }
 
-/** The candidate rules for `el`: those keyed by its id, a class, its tag, an attribute, or none. */
-function candidateRules(index: StyleIndex, el: Element): IndexedRule[] {
-  const out: IndexedRule[] = [];
+/** The candidate rule lists for `el`: those keyed by its id, a class, its tag, an attribute, or none. */
+function candidateLists(index: StyleIndex, el: Element): IndexedRule[][] {
+  const lists: IndexedRule[][] = [];
+  const add = (list: IndexedRule[] | undefined): void => {
+    if (list) lists.push(list);
+  };
   const facts = factsOf(el);
-  if (facts.id) out.push(...(index.byId.get(facts.id) ?? []));
-  for (const cls of facts.classes) out.push(...(index.byClass.get(cls) ?? []));
-  out.push(...(index.byTag.get(facts.tag) ?? []));
+  if (facts.id) add(index.byId.get(facts.id));
+  for (const cls of facts.classes) add(index.byClass.get(cls));
+  add(index.byTag.get(facts.tag));
   if (index.byAttr.size > 0) {
     const names = new Set<string>();
     for (const attr of el.attributes) names.add(attr.name.toLowerCase());
-    for (const name of names) out.push(...(index.byAttr.get(name) ?? []));
+    for (const name of names) add(index.byAttr.get(name));
   }
-  out.push(...index.universal);
-  return out;
+  add(index.universal);
+  return lists;
 }
 
 /** Throws PageBudgetError once the page's matching budget is spent. */
 function appliedDecls(index: StyleIndex, el: Element, page: { steps: number }): AppliedDecl[] {
   const applied: AppliedDecl[] = [];
-  for (const rule of candidateRules(index, el)) {
+  for (const rule of candidateLists(index, el).flat()) {
     if (--page.steps < 0) throw new PageBudgetError();
     // Unparsed: whether its loosely-read subject fits decides "may apply".
     const match: Match = rule.selector
