@@ -41,7 +41,7 @@ export const UNKNOWN_REASON_LABELS: Record<UnknownReason, string> = {
   selector:
     "a rule in the page's CSS with a selector squirrel does not evaluate may change whether it is hidden",
   value: "its display or visibility is set through a CSS variable",
-  truncated: "the page's inline CSS is larger than squirrel reads",
+  truncated: "the page's inline CSS is too large or too complex for squirrel to resolve",
 };
 
 export interface StaticVisibilityOptions {
@@ -61,6 +61,12 @@ const MAX_STYLE_RULES = 20_000;
 const MAX_COMPOUNDS = 16;
 /** Compound tests for one selector against one element, bounding descendant backtracking. */
 const MATCH_STEP_BUDGET = 2_000;
+/**
+ * Compound tests for one page. A real page spends a few thousand; a sheet of
+ * universal-subject selectors over a deep tree can spend millions, so past this
+ * the remaining elements come back `unknown` rather than stalling the audit.
+ */
+const PAGE_STEP_BUDGET = 300_000;
 
 const SHOWN: StaticVisibility = { state: "shown" };
 const HIDDEN: StaticVisibility = { state: "hidden" };
@@ -419,8 +425,23 @@ function and(a: Match, b: Match): Match {
   return a;
 }
 
-function classTokens(el: Element): string[] {
-  return (getAttrCI(el, "class") ?? "").split(/[\t\n\f\r ]+/).filter(Boolean);
+/** What selectors read most, read once per element. */
+interface ElementFacts {
+  tag: string;
+  id: string | null;
+  classes: Set<string>;
+}
+
+const factsCache = new WeakMap<Element, ElementFacts>();
+
+function factsOf(el: Element): ElementFacts {
+  let facts = factsCache.get(el);
+  if (!facts) {
+    const classes = (getAttrCI(el, "class") ?? "").split(/[\t\n\f\r ]+/).filter(Boolean);
+    facts = { tag: tagOf(el), id: getAttrCI(el, "id"), classes: new Set(classes) };
+    factsCache.set(el, facts);
+  }
+  return facts;
 }
 
 function tagOf(el: Element): string {
@@ -487,12 +508,10 @@ function matchPseudo(el: Element, pseudo: PseudoTest): Match {
 }
 
 function matchCompound(el: Element, compound: Compound): Match {
-  if (compound.tag !== null && tagOf(el) !== compound.tag) return false;
-  for (const id of compound.ids) if (getAttrCI(el, "id") !== id) return false;
-  if (compound.classes.length > 0) {
-    const tokens = classTokens(el);
-    for (const cls of compound.classes) if (!tokens.includes(cls)) return false;
-  }
+  const facts = factsOf(el);
+  if (compound.tag !== null && facts.tag !== compound.tag) return false;
+  for (const id of compound.ids) if (facts.id !== id) return false;
+  for (const cls of compound.classes) if (!facts.classes.has(cls)) return false;
   for (const attr of compound.attrs) if (!matchAttr(el, attr)) return false;
   let result: Match = true;
   for (const pseudo of compound.pseudos) {
@@ -504,9 +523,20 @@ function matchCompound(el: Element, compound: Compound): Match {
 
 class MatchBudgetError extends Error {}
 
+/** Thrown when the page's whole step budget is spent. */
+class PageBudgetError extends Error {}
+
+interface StepBudget {
+  /** Steps left for this one match. */
+  match: number;
+  /** Steps left for the page, shared by every match. */
+  page: { steps: number };
+}
+
 /** Right-to-left match of compounds[0..index] ending at `el`. */
-function matchFrom(sel: ComplexSelector, index: number, el: Element, budget: { steps: number }): Match {
-  if (--budget.steps < 0) throw new MatchBudgetError();
+function matchFrom(sel: ComplexSelector, index: number, el: Element, budget: StepBudget): Match {
+  if (--budget.page.steps < 0) throw new PageBudgetError();
+  if (--budget.match < 0) throw new MatchBudgetError();
   const own = matchCompound(el, sel.compounds[index]);
   if (own === false || index === 0) return own;
 
@@ -530,9 +560,9 @@ function matchFrom(sel: ComplexSelector, index: number, el: Element, budget: { s
   return and(own, rest);
 }
 
-function matchSelector(sel: ComplexSelector, el: Element): Match {
+function matchSelector(sel: ComplexSelector, el: Element, page: { steps: number }): Match {
   try {
-    return matchFrom(sel, sel.compounds.length - 1, el, { steps: MATCH_STEP_BUDGET });
+    return matchFrom(sel, sel.compounds.length - 1, el, { match: MATCH_STEP_BUDGET, page });
   } catch (err) {
     if (err instanceof MatchBudgetError) return "selector";
     throw err;
@@ -719,6 +749,8 @@ interface StyleIndex {
   byId: Map<string, IndexedRule[]>;
   byClass: Map<string, IndexedRule[]>;
   byTag: Map<string, IndexedRule[]>;
+  /** Keyed by lower-cased attribute name, for subjects such as `[hidden]`. */
+  byAttr: Map<string, IndexedRule[]>;
   universal: IndexedRule[];
   /** The text or rule budget ran out, so rules past it were never read. */
   truncated: boolean;
@@ -734,6 +766,7 @@ function addToIndex(index: StyleIndex, rule: IndexedRule): void {
   if (subject.ids.length > 0) push(index.byId, subject.ids[0]);
   else if (subject.classes.length > 0) push(index.byClass, subject.classes[0]);
   else if (subject.tag !== null) push(index.byTag, subject.tag);
+  else if (subject.attrs.length > 0) push(index.byAttr, subject.attrs[0].name);
   else index.universal.push(rule);
 }
 
@@ -752,11 +785,21 @@ function styleElementCondition(style: Element): Condition {
   return combineConditions(conditions);
 }
 
+/**
+ * The rule scanner keeps comments that sit before or inside a selector, such as
+ * the marker styled-components writes before every rule. A comment is not
+ * whitespace in a selector: `.a`, a comment, then `.b` is the compound `.a.b`.
+ */
+function stripComments(text: string): string {
+  return text.includes("/*") ? text.replace(/\/\*[\s\S]*?(?:\*\/|$)/g, "").trim() : text;
+}
+
 function buildStyleIndex(doc: Document): StyleIndex {
   const index: StyleIndex = {
     byId: new Map(),
     byClass: new Map(),
     byTag: new Map(),
+    byAttr: new Map(),
     universal: [],
     truncated: false,
   };
@@ -775,7 +818,10 @@ function buildStyleIndex(doc: Document): StyleIndex {
       ruleBudget--;
       order++;
       if (!/display|visibility/i.test(rule.body)) continue;
-      const condition = combineConditions([elementCondition, ...rule.atRules.map(atRuleCondition)]);
+      const condition = combineConditions([
+        elementCondition,
+        ...rule.atRules.map((prelude) => atRuleCondition(stripComments(prelude))),
+      ]);
       if (condition === "never") continue;
 
       const decls: Decl[] = [];
@@ -785,7 +831,7 @@ function buildStyleIndex(doc: Document): StyleIndex {
       }
       if (decls.length === 0) continue;
 
-      for (const selectorText of splitSelectorList(rule.selector)) {
+      for (const selectorText of splitSelectorList(stripComments(rule.selector))) {
         let selector: ComplexSelector | null = null;
         let subject: Compound;
         try {
@@ -813,23 +859,29 @@ function buildStyleIndex(doc: Document): StyleIndex {
   return index;
 }
 
-/** The candidate rules for `el`: those keyed by its id, a class, its tag, or none. */
+/** The candidate rules for `el`: those keyed by its id, a class, its tag, an attribute, or none. */
 function candidateRules(index: StyleIndex, el: Element): IndexedRule[] {
   const out: IndexedRule[] = [];
-  const id = getAttrCI(el, "id");
-  if (id) out.push(...(index.byId.get(id) ?? []));
-  for (const cls of new Set(classTokens(el))) out.push(...(index.byClass.get(cls) ?? []));
-  out.push(...(index.byTag.get(tagOf(el)) ?? []));
+  const facts = factsOf(el);
+  if (facts.id) out.push(...(index.byId.get(facts.id) ?? []));
+  for (const cls of facts.classes) out.push(...(index.byClass.get(cls) ?? []));
+  out.push(...(index.byTag.get(facts.tag) ?? []));
+  if (index.byAttr.size > 0) {
+    const names = new Set<string>();
+    for (const attr of el.attributes) names.add(attr.name.toLowerCase());
+    for (const name of names) out.push(...(index.byAttr.get(name) ?? []));
+  }
   out.push(...index.universal);
   return out;
 }
 
-function appliedDecls(index: StyleIndex, el: Element): AppliedDecl[] {
+/** Throws PageBudgetError once the page's matching budget is spent. */
+function appliedDecls(index: StyleIndex, el: Element, page: { steps: number }): AppliedDecl[] {
   const applied: AppliedDecl[] = [];
   for (const rule of candidateRules(index, el)) {
     // Unparsed: whether its loosely-read subject fits decides "may apply".
     const match: Match = rule.selector
-      ? matchSelector(rule.selector, el)
+      ? matchSelector(rule.selector, el, page)
       : matchCompound(el, rule.subject) === false
         ? false
         : "selector";
@@ -967,6 +1019,7 @@ export function createStaticVisibility(
 ): StaticVisibilityResolver {
   let index: StyleIndex | null = null;
   const states = new Map<Element, ChainState>();
+  const page = { steps: PAGE_STEP_BUDGET };
 
   const ownState = (el: Element, parent: ChainState): ChainState => {
     if (parent.removed) return parent;
@@ -976,7 +1029,20 @@ export function createStaticVisibility(
     if (markupHidden) return { ...parent, removed: true, removedByMarkup: true };
 
     index ??= buildStyleIndex(doc);
-    const applied = appliedDecls(index, el);
+    let applied: AppliedDecl[];
+    try {
+      if (page.steps <= 0) throw new PageBudgetError();
+      applied = appliedDecls(index, el, page);
+    } catch (err) {
+      if (!(err instanceof PageBudgetError)) throw err;
+      // This element's own rules were never read: neither its display nor its
+      // visibility is settled.
+      return {
+        ...parent,
+        displayUnknown: parent.displayUnknown ?? "truncated",
+        visibility: { ...parent.visibility, unknown: parent.visibility.unknown ?? "truncated" },
+      };
+    }
     const display = resolveDisplay(applied, uaHidden(el));
     if (display.none && display.unknown === null) {
       return { ...parent, removed: true, removedByMarkup: false };

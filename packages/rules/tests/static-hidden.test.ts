@@ -154,6 +154,17 @@ describe("static-hidden: selectors", () => {
     ).toBe("shown");
   });
 
+  test("comments before or inside a selector are dropped", () => {
+    expect(verdict('<b id="t" class="x"></b>', "<style>/*!sc*/\n.x{display:none}</style>")).toBe("hidden");
+    expect(verdict('<b id="t" hidden></b>', "<style>/* fix */ *[hidden]{display:none}</style>")).toBe(
+      "hidden",
+    );
+    expect(verdict('<b id="t" class="a b"></b>', "<style>.a/**/.b{display:none}</style>")).toBe("hidden");
+    expect(verdict('<b id="t" class="x"></b>', "<style>@media /* wide */ print{.x{display:none}}</style>")).toBe(
+      "shown",
+    );
+  });
+
   test(":defined holds for built-in elements", () => {
     expect(verdict('<b id="t"></b>', "<style>:not(:defined){visibility:hidden}</style>")).toBe("shown");
   });
