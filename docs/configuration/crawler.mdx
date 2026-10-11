@@ -778,9 +778,12 @@ end-to-end.
 
 **Cloud audits:** custom headers for dashboard **cloud** audits are available on
 [every plan](/dashboard/crawl-settings#custom-request-headers), Free included.
-Set them per-website under **Settings → Crawl → Custom request headers**. The render worker applies
-them to the headless browser via `setExtraHTTPHeaders`, so they ride every
-request the rendered page makes.
+Set them per-website under **Settings → Crawl → Custom request headers**. Plain
+HTTP requests carry them. For pages rendered in the cloud browser, by cloud
+audits and by signed-in CLI audits, see
+[rendering and custom headers](/cloud/firewall#rendering-and-custom-headers).
+Use `--http` (or **Rendering: Off** for a cloud audit) when the site is only
+reachable with the headers.
 
 ---
 
