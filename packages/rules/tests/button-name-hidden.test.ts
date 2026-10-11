@@ -39,7 +39,7 @@ const CASES = {
   bad: "<button></button>",
   title: '<button title="Zoom in"></button>',
   named: '<button aria-label="Zoom in"></button>',
-  css: "<style>.closed{display:none}</style><div class=\"closed\"><button></button></div>",
+  css: '<style>.closed{display:none}</style><div class="closed"><button></button></div>',
   hidden: "<div hidden><button></button></div>",
   aria: '<div aria-hidden="true"><button></button></div>',
 };
@@ -123,7 +123,9 @@ describe("a11y/button-name: what counts as hidden", () => {
   });
 
   test("a button inside <template> is not rendered", () => {
-    expect(check(run(fixture("<template><button></button></template>")), "button-name")?.status).not.toBe("fail");
+    expect(
+      check(run(fixture("<template><button></button></template>")), "button-name")?.status,
+    ).not.toBe("fail");
   });
 
   test("off-screen and merely disabled buttons are not treated as hidden", () => {
@@ -180,16 +182,12 @@ describe("a11y/button-name: CSS a static read cannot settle", () => {
     expect(
       statuses(
         fixture(
-          "<style>@supports (display:grid){.closed{display:none}}</style><div class=\"closed\"><button></button></div>",
+          '<style>@supports (display:grid){.closed{display:none}}</style><div class="closed"><button></button></div>',
         ),
       ),
     ).toEqual({ "button-name-unconfirmed": "warn" });
     expect(
-      statuses(
-        fixture(
-          "<style>@media print{button{display:none}}</style><button></button>",
-        ),
-      ),
+      statuses(fixture("<style>@media print{button{display:none}}</style><button></button>")),
     ).toEqual({ "button-name": "fail" });
   });
 
@@ -197,7 +195,7 @@ describe("a11y/button-name: CSS a static read cannot settle", () => {
     expect(
       statuses(
         fixture(
-          "<style>@media (min-width: 768px){.menu-toggle{display:none}}</style><button class=\"menu-toggle\"></button>",
+          '<style>@media (min-width: 768px){.menu-toggle{display:none}}</style><button class="menu-toggle"></button>',
         ),
       ),
     ).toEqual({ "button-name": "fail" });

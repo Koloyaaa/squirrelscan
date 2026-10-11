@@ -22,7 +22,7 @@ import type { Document } from "linkedom";
 
 import { getAttrCI, hasAttrCI } from "@squirrelscan/utils";
 
-import { parseRules, scanDeclarations } from "./css-scan";
+import { parseRules, scanDeclarations, skipString } from "./css-scan";
 
 /** Why a static read cannot settle whether an element is hidden. */
 export type UnknownReason = "conditional" | "interactive" | "selector" | "value" | "truncated";
@@ -173,23 +173,23 @@ function readIdent(s: string, start: number): { ident: string; end: number } | n
   return out ? { ident: out, end: i } : null;
 }
 
-/** Index of the `close` that balances the opener at `start`, skipping strings. */
+/** Index of the `close` that balances the opener at `start`, skipping strings and escapes. */
 function findClose(s: string, start: number, open: string, close: string): number {
   let depth = 0;
-  for (let i = start; i < s.length; i++) {
+  let i = start;
+  while (i < s.length) {
     const c = s[i];
     if (c === "\\") {
-      i++;
+      i += 2;
       continue;
     }
     if (c === '"' || c === "'") {
-      const end = s.indexOf(c, i + 1);
-      if (end === -1) return -1;
-      i = end;
+      i = skipString(s, i);
       continue;
     }
     if (c === open) depth++;
     else if (c === close && --depth === 0) return i;
+    i++;
   }
   return -1;
 }
@@ -199,16 +199,15 @@ export function splitSelectorList(text: string): string[] {
   const parts: string[] = [];
   let depth = 0;
   let start = 0;
-  for (let i = 0; i < text.length; i++) {
+  let i = 0;
+  while (i < text.length) {
     const c = text[i];
     if (c === "\\") {
-      i++;
+      i += 2;
       continue;
     }
     if (c === '"' || c === "'") {
-      const end = text.indexOf(c, i + 1);
-      if (end === -1) break;
-      i = end;
+      i = skipString(text, i);
       continue;
     }
     if (c === "(" || c === "[") depth++;
@@ -217,15 +216,17 @@ export function splitSelectorList(text: string): string[] {
       parts.push(text.slice(start, i));
       start = i + 1;
     }
+    i++;
   }
   parts.push(text.slice(start));
   return parts.map((p) => p.trim()).filter(Boolean);
 }
 
 function parseAttr(body: string): AttrTest {
-  const m = /^\s*([-_a-zA-Z0-9]+)\s*(?:([~|^$*]?=)\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^\s"']+))\s*([iIsS])?\s*)?$/.exec(
-    body,
-  );
+  const m =
+    /^\s*([-_a-zA-Z0-9]+)\s*(?:([~|^$*]?=)\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^\s"']+))\s*([iIsS])?\s*)?$/.exec(
+      body,
+    );
   if (!m) throw new SelectorSyntaxError();
   const value = (m[3] ?? m[4] ?? m[5] ?? "").replace(/\\(.)/g, "$1");
   return {
@@ -578,7 +579,12 @@ function matchSelector(sel: ComplexSelector, el: Element, page: { steps: number 
  */
 type Condition = "always" | "never" | "variant" | "conditional";
 
-const CONDITION_RANK: Record<Condition, number> = { never: 0, conditional: 1, variant: 2, always: 3 };
+const CONDITION_RANK: Record<Condition, number> = {
+  never: 0,
+  conditional: 1,
+  variant: 2,
+  always: 3,
+};
 
 /** At-rules whose blocks hold no rules that style elements. */
 const NON_STYLE_AT_RULES = new Set([
@@ -772,7 +778,8 @@ function addToIndex(index: StyleIndex, rule: IndexedRule): void {
 
 function styleElementCondition(style: Element): Condition {
   const type = getAttrCI(style, "type");
-  if (type !== null && type.trim() !== "" && type.trim().toLowerCase() !== "text/css") return "never";
+  if (type !== null && type.trim() !== "" && type.trim().toLowerCase() !== "text/css")
+    return "never";
   const conditions: Condition[] = [];
   const media = getAttrCI(style, "media");
   if (media !== null) conditions.push(mediaCondition(media));

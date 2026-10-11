@@ -8,7 +8,7 @@
  * below so that punctuation inside a quoted value or a `data:` URL cannot be
  * mistaken for structure.
  */
-function skipString(css: string, start: number): number {
+export function skipString(css: string, start: number): number {
   const quote = css[start];
   let i = start + 1;
   while (i < css.length) {

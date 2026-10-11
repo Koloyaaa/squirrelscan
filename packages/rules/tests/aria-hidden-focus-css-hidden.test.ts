@@ -63,7 +63,13 @@ describe("a11y/aria-hidden-focus: the six repro fixtures (pub#664)", () => {
     });
   });
 
-  for (const name of ["display-none", "hidden", "visibility-hidden", "inert", "disabled"] as const) {
+  for (const name of [
+    "display-none",
+    "hidden",
+    "visibility-hidden",
+    "inert",
+    "disabled",
+  ] as const) {
     test(`${name}: passes`, () => {
       expect(statuses(fixture(VARIANTS[name]))).toEqual({ "aria-hidden-focus": "pass" });
     });

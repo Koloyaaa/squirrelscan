@@ -38,7 +38,9 @@ describe("static-hidden: markup", () => {
   test("a <template> subtree is never rendered", () => {
     // querySelectorAll does not walk into <template>, but its children are
     // reachable through the element, and a caller walking them gets "hidden".
-    const { document } = parseHTML("<!doctype html><html><body><template><b></b></template></body></html>");
+    const { document } = parseHTML(
+      "<!doctype html><html><body><template><b></b></template></body></html>",
+    );
     const inner = document.querySelector("template")?.firstElementChild;
     expect(inner).toBeTruthy();
     const seen = createStaticVisibility(document, { ariaHidden: false }).visibility(
@@ -63,9 +65,9 @@ describe("static-hidden: markup", () => {
 
 describe("static-hidden: the cascade", () => {
   test("inline beats a sheet rule, !important in a sheet beats inline", () => {
-    expect(verdict('<b id="t" class="x" style="display:inline"></b>', "<style>.x{display:none}</style>")).toBe(
-      "shown",
-    );
+    expect(
+      verdict('<b id="t" class="x" style="display:inline"></b>', "<style>.x{display:none}</style>"),
+    ).toBe("shown");
     expect(
       verdict(
         '<b id="t" class="x" style="display:inline"></b>',
@@ -81,34 +83,40 @@ describe("static-hidden: the cascade", () => {
   });
 
   test("specificity, then source order", () => {
-    expect(verdict('<b id="t" class="x"></b>', "<style>#t{display:none}.x{display:block}</style>")).toBe(
-      "hidden",
-    );
-    expect(verdict('<b id="t" class="x"></b>', "<style>.x{display:none}.x{display:block}</style>")).toBe(
-      "shown",
-    );
     expect(
-      verdict('<b id="t" class="x"></b>', "<style>.x{display:block}</style><style>b.x{display:none}</style>"),
+      verdict('<b id="t" class="x"></b>', "<style>#t{display:none}.x{display:block}</style>"),
+    ).toBe("hidden");
+    expect(
+      verdict('<b id="t" class="x"></b>', "<style>.x{display:none}.x{display:block}</style>"),
+    ).toBe("shown");
+    expect(
+      verdict(
+        '<b id="t" class="x"></b>',
+        "<style>.x{display:block}</style><style>b.x{display:none}</style>",
+      ),
     ).toBe("hidden");
   });
 
   test("display:none on any ancestor cannot be undone below it", () => {
     expect(
-      verdict('<div class="a"><b id="t" style="display:block"></b></div>', "<style>.a{display:none}</style>"),
+      verdict(
+        '<div class="a"><b id="t" style="display:block"></b></div>',
+        "<style>.a{display:none}</style>",
+      ),
     ).toBe("hidden");
   });
 
   test("visibility inherits, and a descendant can set it back", () => {
     expect(verdict('<div style="visibility:hidden"><p><b id="t"></b></p></div>')).toBe("hidden");
-    expect(verdict('<div style="visibility:hidden"><b id="t" style="visibility:visible"></b></div>')).toBe(
-      "shown",
-    );
-    expect(verdict('<div style="visibility:hidden"><b id="t" style="visibility:inherit"></b></div>')).toBe(
-      "hidden",
-    );
-    expect(verdict('<div style="visibility:hidden"><b id="t" style="visibility:initial"></b></div>')).toBe(
-      "shown",
-    );
+    expect(
+      verdict('<div style="visibility:hidden"><b id="t" style="visibility:visible"></b></div>'),
+    ).toBe("shown");
+    expect(
+      verdict('<div style="visibility:hidden"><b id="t" style="visibility:inherit"></b></div>'),
+    ).toBe("hidden");
+    expect(
+      verdict('<div style="visibility:hidden"><b id="t" style="visibility:initial"></b></div>'),
+    ).toBe("shown");
   });
 
   test("an invalid value is dropped, as a browser drops it", () => {
@@ -123,12 +131,12 @@ describe("static-hidden: the cascade", () => {
 
 describe("static-hidden: selectors", () => {
   test("escaped class names (Tailwind) match", () => {
-    expect(verdict('<b id="t" class="md:hidden"></b>', "<style>.md\\:hidden{display:none}</style>")).toBe(
-      "hidden",
-    );
-    expect(verdict('<b id="t" class="w-1/2"></b>', "<style>.w-1\\/2{visibility:hidden}</style>")).toBe(
-      "hidden",
-    );
+    expect(
+      verdict('<b id="t" class="md:hidden"></b>', "<style>.md\\:hidden{display:none}</style>"),
+    ).toBe("hidden");
+    expect(
+      verdict('<b id="t" class="w-1/2"></b>', "<style>.w-1\\/2{visibility:hidden}</style>"),
+    ).toBe("hidden");
   });
 
   test("combinators: child, descendant, adjacent and general sibling", () => {
@@ -144,35 +152,52 @@ describe("static-hidden: selectors", () => {
     const head = "<style>.modal:not(.show){display:none}</style>";
     expect(verdict('<div class="modal"><b id="t"></b></div>', head)).toBe("hidden");
     expect(verdict('<div class="modal show"><b id="t"></b></div>', head)).toBe("shown");
-    expect(verdict('<b id="t" class="y"></b>', "<style>:is(.x, .y){display:none}</style>")).toBe("hidden");
+    expect(verdict('<b id="t" class="y"></b>', "<style>:is(.x, .y){display:none}</style>")).toBe(
+      "hidden",
+    );
     // :where() adds no specificity: a plain .z rule beats it even when it comes first.
     expect(
-      verdict('<b id="t" class="z"></b>', "<style>.z{display:none}:where(.z){display:block}</style>"),
+      verdict(
+        '<b id="t" class="z"></b>',
+        "<style>.z{display:none}:where(.z){display:block}</style>",
+      ),
     ).toBe("hidden");
     expect(
-      verdict('<b id="t" class="z"></b>', "<style>:where(.z){display:none}b{display:block}</style>"),
+      verdict(
+        '<b id="t" class="z"></b>',
+        "<style>:where(.z){display:none}b{display:block}</style>",
+      ),
     ).toBe("shown");
   });
 
   test("comments before or inside a selector are dropped", () => {
-    expect(verdict('<b id="t" class="x"></b>', "<style>/*!sc*/\n.x{display:none}</style>")).toBe("hidden");
-    expect(verdict('<b id="t" hidden></b>', "<style>/* fix */ *[hidden]{display:none}</style>")).toBe(
+    expect(verdict('<b id="t" class="x"></b>', "<style>/*!sc*/\n.x{display:none}</style>")).toBe(
       "hidden",
     );
-    expect(verdict('<b id="t" class="a b"></b>', "<style>.a/**/.b{display:none}</style>")).toBe("hidden");
-    expect(verdict('<b id="t" class="x"></b>', "<style>@media /* wide */ print{.x{display:none}}</style>")).toBe(
-      "shown",
+    expect(
+      verdict('<b id="t" hidden></b>', "<style>/* fix */ *[hidden]{display:none}</style>"),
+    ).toBe("hidden");
+    expect(verdict('<b id="t" class="a b"></b>', "<style>.a/**/.b{display:none}</style>")).toBe(
+      "hidden",
     );
+    expect(
+      verdict(
+        '<b id="t" class="x"></b>',
+        "<style>@media /* wide */ print{.x{display:none}}</style>",
+      ),
+    ).toBe("shown");
   });
 
   test(":defined holds for built-in elements", () => {
-    expect(verdict('<b id="t"></b>', "<style>:not(:defined){visibility:hidden}</style>")).toBe("shown");
+    expect(verdict('<b id="t"></b>', "<style>:not(:defined){visibility:hidden}</style>")).toBe(
+      "shown",
+    );
   });
 
   test("a pseudo-element rule does not hide the element", () => {
-    expect(verdict('<b id="t" class="x"></b>', "<style>.x::before,.x:after{display:none}</style>")).toBe(
-      "shown",
-    );
+    expect(
+      verdict('<b id="t" class="x"></b>', "<style>.x::before,.x:after{display:none}</style>"),
+    ).toBe("shown");
   });
 
   test("attribute selectors", () => {
@@ -201,9 +226,9 @@ describe("static-hidden: selectors", () => {
       ),
     ).toBe("hidden");
     // Unparseable syntax: read loosely, as a rule that may apply.
-    expect(verdict('<div class="p"><b id="t"></b></div>', "<style>ns|div .p{display:none}</style>")).toBe(
-      "unknown:selector",
-    );
+    expect(
+      verdict('<div class="p"><b id="t"></b></div>', "<style>ns|div .p{display:none}</style>"),
+    ).toBe("unknown:selector");
   });
 });
 
@@ -222,23 +247,26 @@ describe("static-hidden: conditions", () => {
   });
 
   test("a <style media> attribute and <noscript> styles", () => {
-    expect(verdict('<b id="t" class="x"></b>', '<style media="print">.x{display:none}</style>')).toBe(
-      "shown",
-    );
-    expect(verdict('<b id="t" class="x"></b>', '<style media="screen">.x{display:none}</style>')).toBe(
-      "hidden",
-    );
-    expect(verdict('<b id="t" class="x"></b>', '<style type="text/x-template">.x{display:none}</style>')).toBe(
-      "shown",
-    );
+    expect(
+      verdict('<b id="t" class="x"></b>', '<style media="print">.x{display:none}</style>'),
+    ).toBe("shown");
+    expect(
+      verdict('<b id="t" class="x"></b>', '<style media="screen">.x{display:none}</style>'),
+    ).toBe("hidden");
+    expect(
+      verdict('<b id="t" class="x"></b>', '<style type="text/x-template">.x{display:none}</style>'),
+    ).toBe("shown");
   });
 
   test("@layer and @supports rules may apply; @keyframes and @font-face hold no element rules", () => {
-    expect(verdict('<b id="t" class="x"></b>', "<style>@layer base{.x{display:none}}</style>")).toBe(
-      "unknown:conditional",
-    );
     expect(
-      verdict('<b id="t" class="x"></b>', "<style>@supports (display:grid){.x{visibility:hidden}}</style>"),
+      verdict('<b id="t" class="x"></b>', "<style>@layer base{.x{display:none}}</style>"),
+    ).toBe("unknown:conditional");
+    expect(
+      verdict(
+        '<b id="t" class="x"></b>',
+        "<style>@supports (display:grid){.x{visibility:hidden}}</style>",
+      ),
     ).toBe("unknown:conditional");
     expect(
       verdict(
@@ -252,8 +280,8 @@ describe("static-hidden: conditions", () => {
     const filler = ".f{color:red}".repeat(80_000);
     expect(verdict('<b id="t"></b>', `<style>${filler}</style>`)).toBe("unknown:truncated");
     // Markup-proven hiding still holds.
-    expect(verdict('<div aria-hidden="true"><b id="t"></b></div>', `<style>${filler}</style>`)).toBe(
-      "hidden",
-    );
+    expect(
+      verdict('<div aria-hidden="true"><b id="t"></b></div>', `<style>${filler}</style>`),
+    ).toBe("hidden");
   });
 });
