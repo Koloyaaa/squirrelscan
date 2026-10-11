@@ -22,7 +22,7 @@ import type { Document } from "linkedom";
 
 import { getAttrCI, hasAttrCI } from "@squirrelscan/utils";
 
-import { parseRules, scanDeclarations, skipString } from "./css-scan";
+import { type CssDeclaration, parseRules, scanDeclarations, skipString } from "./css-scan";
 
 /** Why a static read cannot settle whether an element is hidden. */
 export type UnknownReason = "conditional" | "interactive" | "selector" | "value" | "truncated";
@@ -59,6 +59,12 @@ const MAX_STYLE_CHARS = 1_000_000;
 const MAX_STYLE_RULES = 20_000;
 /** Compounds in one complex selector; real selectors stay far below this. */
 const MAX_COMPOUNDS = 16;
+/** Nesting of `:not()` / `:is()` arguments; deeper ones are not parsed. */
+const MAX_SELECTOR_NESTING = 4;
+/** Longer selectors are read loosely instead of parsed. */
+const MAX_SELECTOR_CHARS = 4_096;
+/** Selectors kept in the index for one page; past this the index counts as cut short. */
+const MAX_INDEXED_SELECTORS = 50_000;
 /** Compound tests for one selector against one element, bounding descendant backtracking. */
 const MATCH_STEP_BUDGET = 2_000;
 /**
@@ -92,7 +98,12 @@ interface AttrTest {
 type PseudoTest =
   | { kind: "not" | "is"; args: Compound[] }
   | { kind: "root" | "first-child" | "last-child" | "only-child" | "defined" }
-  | { kind: "unknown"; reason: UnknownReason };
+  | {
+      kind: "unknown";
+      reason: UnknownReason;
+      /** A functional pseudo-class (`:has(#a)`) whose arguments set a specificity not read here. */
+      opaqueSpecificity: boolean;
+    };
 
 interface Compound {
   /** Lower-cased type selector, or null for `*` or none. */
@@ -101,7 +112,8 @@ interface Compound {
   classes: string[];
   attrs: AttrTest[];
   pseudos: PseudoTest[];
-  specificity: Specificity;
+  /** Null when a functional pseudo-class leaves it unknown. */
+  specificity: Specificity | null;
 }
 
 type Combinator = " " | ">" | "+" | "~";
@@ -110,7 +122,8 @@ interface ComplexSelector {
   compounds: Compound[];
   /** combinators[i] joins compounds[i] and compounds[i + 1]. */
   combinators: Combinator[];
-  specificity: Specificity;
+  /** Null when a functional pseudo-class leaves it unknown. */
+  specificity: Specificity | null;
 }
 
 /** Pseudo-classes for states the page enters through interaction. */
@@ -222,13 +235,27 @@ export function splitSelectorList(text: string): string[] {
   return parts.map((p) => p.trim()).filter(Boolean);
 }
 
+/** Decodes CSS escapes in a string or identifier: `\61` and `\61 ` are `a`, `\:` is `:`. */
+function decodeEscapes(raw: string): string {
+  if (!raw.includes("\\")) return raw;
+  return raw.replace(
+    /\\(?:([0-9a-fA-F]{1,6})[\t\n\f\r ]?|([\s\S]))/g,
+    (_, hex: string | undefined, ch: string) => {
+      if (hex === undefined) return ch === "\n" ? "" : ch;
+      const cp = Number.parseInt(hex, 16);
+      const valid = cp > 0 && cp <= 0x10ffff && (cp < 0xd800 || cp > 0xdfff);
+      return String.fromCodePoint(valid ? cp : 0xfffd);
+    },
+  );
+}
+
 function parseAttr(body: string): AttrTest {
   const m =
     /^\s*([-_a-zA-Z0-9]+)\s*(?:([~|^$*]?=)\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^\s"']+))\s*([iIsS])?\s*)?$/.exec(
       body,
     );
   if (!m) throw new SelectorSyntaxError();
-  const value = (m[3] ?? m[4] ?? m[5] ?? "").replace(/\\(.)/g, "$1");
+  const value = decodeEscapes(m[3] ?? m[4] ?? m[5] ?? "");
   return {
     name: m[1].toLowerCase(),
     op: (m[2] ?? "") as AttrTest["op"],
@@ -241,13 +268,17 @@ function emptyCompound(): Compound {
   return { tag: null, ids: [], classes: [], attrs: [], pseudos: [], specificity: [0, 0, 0] };
 }
 
-function addSpecificity(a: Specificity, b: Specificity): Specificity {
+function addSpecificity(a: Specificity | null, b: Specificity | null): Specificity | null {
+  if (a === null || b === null) return null;
   return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 }
 
-function maxSpecificity(list: Compound[]): Specificity {
+function maxSpecificity(list: Compound[]): Specificity | null {
   let best: Specificity = [0, 0, 0];
-  for (const c of list) if (compareSpecificity(c.specificity, best) > 0) best = c.specificity;
+  for (const c of list) {
+    if (c.specificity === null) return null;
+    if (compareSpecificity(c.specificity, best) > 0) best = c.specificity;
+  }
   return best;
 }
 
@@ -256,30 +287,40 @@ function compareSpecificity(a: Specificity, b: Specificity): number {
 }
 
 /** Parses `:not(.a, [b])`-style arguments: a list of compounds, no combinators. */
-function parseCompoundList(text: string): Compound[] | null {
+function parseCompoundList(text: string, depth: number): Compound[] | null {
   const out: Compound[] = [];
   for (const part of splitSelectorList(text)) {
-    const parsed = parseComplex(part);
+    let parsed: ComplexSelector | typeof PSEUDO_ELEMENT;
+    try {
+      parsed = parseComplex(part, depth);
+    } catch (err) {
+      if (err instanceof SelectorSyntaxError) return null;
+      throw err;
+    }
     if (parsed === PSEUDO_ELEMENT || parsed.compounds.length !== 1) return null;
     out.push(parsed.compounds[0]);
   }
   return out.length > 0 ? out : null;
 }
 
-function parsePseudo(name: string, args: string | null): PseudoTest {
+function parsePseudo(name: string, args: string | null, depth: number): PseudoTest {
   const lower = name.toLowerCase();
   if (args !== null) {
-    if (lower === "not" || lower === "is" || lower === "where" || lower === "matches") {
-      const list = parseCompoundList(args);
-      if (!list) return { kind: "unknown", reason: "selector" };
-      // :where() contributes no specificity; parsePseudo's caller handles that.
-      return { kind: lower === "not" ? "not" : "is", args: list };
-    }
-    return { kind: "unknown", reason: "selector" };
+    const listPseudo =
+      lower === "not" || lower === "is" || lower === "where" || lower === "matches";
+    const list =
+      listPseudo && depth < MAX_SELECTOR_NESTING ? parseCompoundList(args, depth + 1) : null;
+    // :where() contributes no specificity; parsePseudo's caller handles that.
+    if (list) return { kind: lower === "not" ? "not" : "is", args: list };
+    return { kind: "unknown", reason: "selector", opaqueSpecificity: lower !== "where" };
   }
   if (lower === "root" || lower === "first-child" || lower === "last-child") return { kind: lower };
   if (lower === "only-child" || lower === "defined") return { kind: lower };
-  return { kind: "unknown", reason: INTERACTION_PSEUDOS.has(lower) ? "interactive" : "selector" };
+  return {
+    kind: "unknown",
+    reason: INTERACTION_PSEUDOS.has(lower) ? "interactive" : "selector",
+    opaqueSpecificity: false,
+  };
 }
 
 /**
@@ -287,8 +328,9 @@ function parsePseudo(name: string, args: string | null): PseudoTest {
  * for a selector whose subject is a pseudo-element, and throws on syntax this
  * module does not read (namespaces, nesting).
  */
-function parseComplex(text: string): ComplexSelector | typeof PSEUDO_ELEMENT {
+function parseComplex(text: string, depth = 0): ComplexSelector | typeof PSEUDO_ELEMENT {
   const s = text.trim();
+  if (s.length > MAX_SELECTOR_CHARS) throw new SelectorSyntaxError();
   const compounds: Compound[] = [];
   const combinators: Combinator[] = [];
   let current = emptyCompound();
@@ -312,6 +354,8 @@ function parseComplex(text: string): ComplexSelector | typeof PSEUDO_ELEMENT {
         combinator = s[j] as Combinator;
         j++;
         while (j < s.length && CSS_WHITESPACE.test(s[j])) j++;
+        // `button >` is invalid, and a browser drops the whole rule.
+        if (j >= s.length) throw new SelectorSyntaxError();
       }
       if (j >= s.length) break;
       finishCompound();
@@ -349,7 +393,13 @@ function parseComplex(text: string): ComplexSelector | typeof PSEUDO_ELEMENT {
       continue;
     }
     if (c === ":") {
-      if (s[i + 1] === ":") return PSEUDO_ELEMENT;
+      if (s[i + 1] === ":") {
+        // A browser drops the whole rule over a vendor pseudo-element it does
+        // not know (`::-moz-placeholder` in Chrome), so it cannot be skipped
+        // as harmless.
+        if (s[i + 2] === "-") throw new SelectorSyntaxError();
+        return PSEUDO_ELEMENT;
+      }
       const id = readIdent(s, i + 1);
       if (!id) throw new SelectorSyntaxError();
       const name = id.ident.toLowerCase();
@@ -362,14 +412,12 @@ function parseComplex(text: string): ComplexSelector | typeof PSEUDO_ELEMENT {
         args = s.slice(i + 1, end);
         i = end + 1;
       }
-      const pseudo = parsePseudo(name, args);
+      const pseudo = parsePseudo(name, args, depth);
       current.pseudos.push(pseudo);
-      const spec: Specificity =
-        name === "where"
-          ? [0, 0, 0]
-          : pseudo.kind === "not" || pseudo.kind === "is"
-            ? maxSpecificity(pseudo.args)
-            : [0, 1, 0];
+      let spec: Specificity | null = [0, 1, 0];
+      if (name === "where") spec = [0, 0, 0];
+      else if (pseudo.kind === "not" || pseudo.kind === "is") spec = maxSpecificity(pseudo.args);
+      else if (pseudo.kind === "unknown" && pseudo.opaqueSpecificity) spec = null;
       current.specificity = addSpecificity(current.specificity, spec);
       empty = false;
       continue;
@@ -387,7 +435,7 @@ function parseComplex(text: string): ComplexSelector | typeof PSEUDO_ELEMENT {
 
   finishCompound();
   if (compounds.length > MAX_COMPOUNDS) throw new SelectorSyntaxError();
-  let specificity: Specificity = [0, 0, 0];
+  let specificity: Specificity | null = [0, 0, 0];
   for (const compound of compounds) specificity = addSpecificity(specificity, compound.specificity);
   return { compounds, combinators, specificity };
 }
@@ -408,8 +456,8 @@ function looseSubject(text: string): Compound {
   const pieces = flat.split(/[\s>+~]+/).filter(Boolean);
   const last = pieces[pieces.length - 1] ?? "";
   const compound = emptyCompound();
-  for (const m of last.matchAll(/([.#])((?:\\.|[-_a-zA-Z0-9\u0080-￿])+)/g)) {
-    const name = m[2].replace(/\\(.)/g, "$1");
+  for (const m of last.matchAll(/([.#])((?:\\.|[-_a-zA-Z0-9\u0080-\uffff])+)/g)) {
+    const name = decodeEscapes(m[2]);
     if (m[1] === ".") compound.classes.push(name);
     else compound.ids.push(name);
   }
@@ -700,13 +748,80 @@ function cascadeWinner(decls: Decl[]): Decl | null {
 }
 
 const UNREADABLE_VALUE = /\b(?:var|env|attr)\(/;
-const KEYWORD_VALUE = /^-?[a-z][a-z-]*(?: -?[a-z][a-z-]*){0,2}$/;
+/** Single-keyword `display` values, prefixed legacy ones included. */
+const DISPLAY_KEYWORDS = new Set([
+  "none",
+  "contents",
+  "block",
+  "inline",
+  "inline-block",
+  "flex",
+  "inline-flex",
+  "grid",
+  "inline-grid",
+  "flow",
+  "flow-root",
+  "table",
+  "inline-table",
+  "table-row-group",
+  "table-header-group",
+  "table-footer-group",
+  "table-row",
+  "table-cell",
+  "table-column-group",
+  "table-column",
+  "table-caption",
+  "list-item",
+  "run-in",
+  "ruby",
+  "ruby-base",
+  "ruby-text",
+  "ruby-base-container",
+  "ruby-text-container",
+  "math",
+  "-webkit-box",
+  "-webkit-inline-box",
+  "-webkit-flex",
+  "-webkit-inline-flex",
+  "-ms-flexbox",
+  "-ms-inline-flexbox",
+  "-ms-grid",
+  "-ms-inline-grid",
+  "-moz-box",
+  "-moz-inline-box",
+  "initial",
+  "inherit",
+  "unset",
+  "revert",
+  "revert-layer",
+]);
+
+/** Keywords of the multi-keyword `display` syntax (`inline flex`, `block flow list-item`). */
+const DISPLAY_PARTS = new Set([
+  "block",
+  "inline",
+  "run-in",
+  "flow",
+  "flow-root",
+  "table",
+  "flex",
+  "grid",
+  "ruby",
+  "list-item",
+  "math",
+]);
+
+function isDisplayValue(v: string): boolean {
+  if (DISPLAY_KEYWORDS.has(v)) return true;
+  const parts = v.split(" ");
+  return parts.length <= 3 && parts.every((p) => DISPLAY_PARTS.has(p));
+}
 
 /** `display` as hidden or not; null for a value a browser would drop. */
 function displayKind(value: string, uaHidden: boolean): "none" | "shown" | "unknown" | null {
   if (UNREADABLE_VALUE.test(value)) return "unknown";
   const v = value.replace(/\s+/g, " ");
-  if (!KEYWORD_VALUE.test(v)) return null;
+  if (!isDisplayValue(v)) return null;
   if (v === "none") return "none";
   // revert rolls back to the user-agent stylesheet, which hides `[hidden]`.
   if (v === "revert" || v === "revert-layer") return uaHidden ? "none" : "shown";
@@ -749,6 +864,12 @@ interface IndexedRule {
   subject: Compound;
   decls: Decl[];
   condition: Exclude<Condition, "never">;
+  /**
+   * Set when another selector in the same list could not be parsed. A browser
+   * drops the whole rule over one invalid selector, so even a match here only
+   * MAY apply.
+   */
+  approx: UnknownReason | null;
 }
 
 interface StyleIndex {
@@ -801,6 +922,40 @@ function stripComments(text: string): string {
   return text.includes("/*") ? text.replace(/\/\*[\s\S]*?(?:\*\/|$)/g, "").trim() : text;
 }
 
+/**
+ * The `display` and `visibility` a declaration block settles on: per property,
+ * the last valid declaration, an `!important` one beating any normal one. A
+ * value a browser would drop does not count, so `display:none;display:nope`
+ * stays `none`.
+ */
+function blockWinners(body: string, order: number): Decl[] {
+  let display: CssDeclaration | null = null;
+  let visibility: CssDeclaration | null = null;
+  for (const d of scanDeclarations(body, { stripComments: true })) {
+    if (d.prop === "display" && displayKind(d.value, false) !== null) {
+      if (!display || d.important || !display.important) display = d;
+    } else if (d.prop === "visibility" && visibilityKind(d.value) !== null) {
+      if (!visibility || d.important || !visibility.important) visibility = d;
+    }
+  }
+  const decls: Decl[] = [];
+  for (const [prop, d] of [
+    ["display", display],
+    ["visibility", visibility],
+  ] as const) {
+    if (d)
+      decls.push({
+        prop,
+        value: d.value,
+        important: d.important,
+        origin: "sheet",
+        specificity: null,
+        order,
+      });
+  }
+  return decls;
+}
+
 function buildStyleIndex(doc: Document): StyleIndex {
   const index: StyleIndex = {
     byId: new Map(),
@@ -813,9 +968,10 @@ function buildStyleIndex(doc: Document): StyleIndex {
   let budget = MAX_STYLE_CHARS;
   let ruleBudget = MAX_STYLE_RULES;
   let order = 0;
+  let indexed = 0;
 
   for (const style of doc.querySelectorAll("style") as Iterable<Element>) {
-    if (budget <= 0 || ruleBudget <= 0) break;
+    if (budget <= 0 || ruleBudget <= 0 || indexed > MAX_INDEXED_SELECTORS) break;
     const elementCondition = styleElementCondition(style);
     if (elementCondition === "never") continue;
     const text = (style.textContent || "").slice(0, budget);
@@ -831,38 +987,46 @@ function buildStyleIndex(doc: Document): StyleIndex {
       ]);
       if (condition === "never") continue;
 
-      const decls: Decl[] = [];
-      for (const d of scanDeclarations(rule.body)) {
-        if (d.prop !== "display" && d.prop !== "visibility") continue;
-        decls.push({ ...d, prop: d.prop, origin: "sheet", specificity: null, order });
-      }
+      const decls = blockWinners(rule.body, order);
       if (decls.length === 0) continue;
+      // Inside @layer or @scope the cascade is not modelled: a matching rule
+      // there may beat any other, whatever its specificity.
+      const cascadeKnown = rule.atRules.every((prelude) =>
+        /^@(?:-[a-z]+-)?(?:media|supports|container)\b/i.test(stripComments(prelude)),
+      );
 
+      const entries: Array<{ selector: ComplexSelector | null; subject: Compound }> = [];
+      let listInvalid = false;
       for (const selectorText of splitSelectorList(stripComments(rule.selector))) {
-        let selector: ComplexSelector | null = null;
-        let subject: Compound;
         try {
           const parsed = parseComplex(selectorText);
           if (parsed === PSEUDO_ELEMENT) continue;
-          selector = parsed;
-          subject = parsed.compounds[parsed.compounds.length - 1];
+          entries.push({
+            selector: parsed,
+            subject: parsed.compounds[parsed.compounds.length - 1],
+          });
         } catch (err) {
           if (!(err instanceof SelectorSyntaxError)) throw err;
-          subject = looseSubject(selectorText);
+          listInvalid = true;
+          entries.push({ selector: null, subject: looseSubject(selectorText) });
         }
-        const specificity = selector?.specificity ?? null;
+      }
+      for (const { selector, subject } of entries) {
+        if (++indexed > MAX_INDEXED_SELECTORS) break;
+        const specificity = cascadeKnown ? (selector?.specificity ?? null) : null;
         addToIndex(index, {
           selector,
           subject,
           decls: decls.map((d) => ({ ...d, specificity })),
           condition,
+          approx: listInvalid ? "selector" : null,
         });
       }
     }
   }
 
   // Conservative at the boundary: a budget spent exactly to zero reads as cut.
-  index.truncated = budget <= 0 || ruleBudget <= 0;
+  index.truncated = budget <= 0 || ruleBudget <= 0 || indexed > MAX_INDEXED_SELECTORS;
   return index;
 }
 
@@ -895,6 +1059,7 @@ function appliedDecls(index: StyleIndex, el: Element, page: { steps: number }): 
     if (match === false) continue;
     let may: UnknownReason | null;
     if (match !== true) may = match;
+    else if (rule.approx) may = rule.approx;
     else may = rule.condition === "always" ? null : "conditional";
     const variant = match === true && rule.condition === "variant";
     for (const decl of rule.decls) applied.push({ decl, may, variant });
@@ -903,7 +1068,7 @@ function appliedDecls(index: StyleIndex, el: Element, page: { steps: number }): 
   const inline = getAttrCI(el, "style");
   if (inline) {
     let order = 0;
-    for (const d of scanDeclarations(inline)) {
+    for (const d of scanDeclarations(inline, { stripComments: true })) {
       if (d.prop !== "display" && d.prop !== "visibility") continue;
       applied.push({
         decl: { ...d, prop: d.prop, origin: "inline", specificity: [0, 0, 0], order: order++ },
@@ -1005,6 +1170,11 @@ function resolveVisibility(applied: AppliedDecl[], parent: VisibilityState): Vis
     if (mayKind === null) continue;
     if (mayKind === "unknown") {
       state.unknown ??= a.may;
+      continue;
+    }
+    // Inheriting from a parent that is itself unsettled leaves this unsettled too.
+    if (mayKind === "inherit" && parent.unknown !== null) {
+      state.unknown ??= parent.unknown;
       continue;
     }
     const mayHidden = mayKind === "inherit" ? parent.hidden : mayKind === "hidden";

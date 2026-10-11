@@ -285,3 +285,78 @@ describe("static-hidden: conditions", () => {
     ).toBe("hidden");
   });
 });
+
+describe("static-hidden: cases a browser shows that a naive read would hide", () => {
+  test("a later declaration in the same block wins, and !important beats it", () => {
+    expect(verdict('<b id="t"></b>', "<style>b{display:none;display:block}</style>")).toBe("shown");
+    expect(
+      verdict('<b id="t"></b>', "<style>b{visibility:hidden;visibility:visible}</style>"),
+    ).toBe("shown");
+    expect(
+      verdict('<b id="t"></b>', "<style>b{display:none!important;display:block}</style>"),
+    ).toBe("hidden");
+    expect(verdict('<b id="t"></b>', "<style>b{display:none;display:nope}</style>")).toBe("hidden");
+  });
+
+  test("a comment before a property does not hide the declaration", () => {
+    expect(
+      verdict('<b id="t"></b>', "<style>b{display:none}b{/* override */display:block}</style>"),
+    ).toBe("shown");
+    expect(verdict('<b id="t" style="/* x */display:none"></b>')).toBe("hidden");
+  });
+
+  test("escapes in attribute values are decoded", () => {
+    expect(
+      verdict('<b id="t" data-x="a"></b>', '<style>b:not([data-x="\\61"]){display:none}</style>'),
+    ).toBe("shown");
+  });
+
+  test("an @layer rule may beat an unlayered !important one, whatever its specificity", () => {
+    expect(
+      verdict(
+        '<b id="t"></b>',
+        "<style>#t{display:none!important}@layer fixes{b{display:block!important}}</style>",
+      ),
+    ).toBe("unknown:conditional");
+  });
+
+  test("a selector argument not evaluated leaves the specificity unknown too", () => {
+    expect(
+      verdict(
+        '<div id="p"><b id="t"></b></div>',
+        "<style>#t{display:none}b:is(#p > b){display:block}</style>",
+      ),
+    ).toBe("unknown:selector");
+  });
+
+  test("inheriting visibility from an unsettled parent is unsettled", () => {
+    expect(
+      verdict(
+        '<div class="p"><b id="t"></b></div>',
+        "<style>.p{visibility:hidden}.p:hover{visibility:visible}b{visibility:hidden}.p:hover b{visibility:inherit}</style>",
+      ),
+    ).toBe("unknown:interactive");
+  });
+
+  test("an invalid selector voids the whole rule, so its valid siblings only may apply", () => {
+    expect(verdict('<b id="t"></b>', "<style>b > {display:none}</style>")).toBe("unknown:selector");
+    expect(verdict('<b id="t"></b>', "<style>b, i::-moz-placeholder{display:none}</style>")).toBe(
+      "unknown:selector",
+    );
+    // A standard pseudo-element is valid: the rest of the list applies.
+    expect(verdict('<b id="t"></b>', "<style>b, i::before{display:none}</style>")).toBe("hidden");
+  });
+
+  test("deeply nested selectors and huge selector lists stay bounded", () => {
+    const nested = `${":is(".repeat(20_000)}b${")".repeat(20_000)}`;
+    expect(["unknown:selector", "shown"]).toContain(
+      verdict('<b id="t"></b>', `<style>${nested}{display:none}</style>`),
+    );
+    const list = Array.from({ length: 20_000 }, () => "*").join(",");
+    const started = performance.now();
+    expect(
+      verdict('<b id="t"></b>', `<style>${list}{${"display:none;".repeat(20_000)}}</style>`),
+    ).toBe("hidden");
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+});

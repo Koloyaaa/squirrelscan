@@ -44,14 +44,21 @@ export interface CssDeclaration {
  * `url()`, and naive splitting there manufactures declarations that were never
  * written.
  */
-export function scanDeclarations(css: string): CssDeclaration[] {
+export function scanDeclarations(
+  css: string,
+  options: { stripComments?: boolean } = {},
+): CssDeclaration[] {
   const decls: CssDeclaration[] = [];
   let i = 0;
   let chunkStart = 0;
   let depth = 0;
 
   const flush = (end: number): void => {
-    const chunk = css.slice(chunkStart, end);
+    let chunk = css.slice(chunkStart, end);
+    // Off by default: content/hidden-text has always read the raw chunk.
+    if (options.stripComments && chunk.includes("/*")) {
+      chunk = chunk.replace(/\/\*[\s\S]*?(?:\*\/|$)/g, "");
+    }
     let colon = -1;
     let d = 0;
     for (let k = 0; k < chunk.length; k++) {
