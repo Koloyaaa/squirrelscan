@@ -22,7 +22,7 @@ import type { Document } from "linkedom";
 
 import { getAttrCI, hasAttrCI } from "@squirrelscan/utils";
 
-import { type CssDeclaration, parseRules, scanDeclarations, skipString } from "./css-scan";
+import { parseRules, scanDeclarations, skipString } from "./css-scan";
 
 /** Why a static read cannot settle whether an element is hidden. */
 export type UnknownReason = "conditional" | "interactive" | "selector" | "value" | "truncated";
@@ -492,8 +492,18 @@ function looseSubject(text: string): Compound {
   while (i < text.length) {
     const c = text[i];
     if (c === "\\") {
-      if (depth === 0) last += text.slice(i, i + 2);
-      i += 2;
+      // A whole escape, a hex one's terminating space included, is one
+      // character of a name: `.\\66 oo` is `.foo`, not `.f` then `oo`.
+      const hex = /^[0-9a-fA-F]{1,6}/.exec(text.slice(i + 1, i + 7));
+      let end = i + 2;
+      let ch = text[i + 1] ?? "";
+      if (hex) {
+        end = i + 1 + hex[0].length;
+        ch = decodeEscapes(text.slice(i, end));
+        if (CSS_WHITESPACE.test(text[end] ?? "")) end++;
+      }
+      if (depth === 0) last += IDENT_CHAR.test(ch) || ch.charCodeAt(0) >= 0x80 ? ch : `\\${ch}`;
+      i = end;
       continue;
     }
     if (c === "(" || c === "[") depth++;
@@ -971,23 +981,66 @@ const CSS_COMMENT = /\/\*[\s\S]*?(?:\*\/|$)/g;
  * the marker styled-components writes before every rule. A comment is not
  * whitespace in a selector: `.a`, a comment, then `.b` is the compound `.a.b`.
  * Between two identifier characters it splits one token into two, which no
- * selector parses, so it is replaced by a character the parser rejects.
+ * selector parses, so it is replaced by a character the parser rejects. Quoted
+ * strings are copied as they are: a comment inside one is text.
  */
 function stripSelectorComments(text: string): string {
   if (!text.includes("/*")) return text;
-  return text
-    .replace(CSS_COMMENT, (comment: string, offset: number) =>
-      /[-\w]/.test(text[offset - 1] ?? "") && /[-\w]/.test(text[offset + comment.length] ?? "")
-        ? "/"
-        : "",
-    )
-    .trim();
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "\\") {
+      out += text.slice(i, i + 2);
+      i += 2;
+    } else if (c === '"' || c === "'") {
+      const end = skipString(text, i);
+      out += text.slice(i, end);
+      i = end;
+    } else if (c === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      const end = close === -1 ? text.length : close + 2;
+      const splitsToken = /[-\w]/.test(out[out.length - 1] ?? "") && /[-\w]/.test(text[end] ?? "");
+      if (splitsToken) out += "/";
+      i = end;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out.trim();
 }
 
 /** In an at-rule prelude a comment separates tokens like whitespace. */
 function stripPreludeComments(text: string): string {
   return text.includes("/*") ? text.replace(CSS_COMMENT, " ").trim() : text;
 }
+
+interface HidingDeclaration {
+  prop: "display" | "visibility";
+  value: string;
+  important: boolean;
+}
+
+/** `display` and `visibility` declarations, with the `all` shorthand counted as both. */
+function hidingDeclarations(css: string): HidingDeclaration[] {
+  const out: HidingDeclaration[] = [];
+  for (const d of scanDeclarations(css, { stripComments: true })) {
+    if (d.prop === "display" || d.prop === "visibility") {
+      out.push({ prop: d.prop, value: d.value, important: d.important });
+    } else if (d.prop === "all" && CSS_WIDE_KEYWORDS.has(d.value)) {
+      // `all: initial` resets both, which shows an element `display:none` hid.
+      out.push({ prop: "display", value: d.value, important: d.important });
+      out.push({ prop: "visibility", value: d.value, important: d.important });
+    }
+  }
+  return out;
+}
+
+const CSS_WIDE_KEYWORDS = new Set(["initial", "inherit", "unset", "revert", "revert-layer"]);
+
+/** Cheap test for a block worth scanning. */
+const HIDING_PROPERTY = /display|visibility|\ball\s*:/i;
 
 /**
  * The `display` and `visibility` a declaration block settles on: per property,
@@ -996,31 +1049,132 @@ function stripPreludeComments(text: string): string {
  * stays `none`.
  */
 function blockWinners(body: string, order: number): Decl[] {
-  let display: CssDeclaration | null = null;
-  let visibility: CssDeclaration | null = null;
-  for (const d of scanDeclarations(body, { stripComments: true })) {
-    if (d.prop === "display" && displayKind(d.value, false) !== null) {
-      if (!display || d.important || !display.important) display = d;
-    } else if (d.prop === "visibility" && visibilityKind(d.value) !== null) {
-      if (!visibility || d.important || !visibility.important) visibility = d;
+  const winners = new Map<"display" | "visibility", { value: string; important: boolean }>();
+  for (const d of hidingDeclarations(body)) {
+    const valid = d.prop === "display" ? displayKind(d.value, false) : visibilityKind(d.value);
+    if (valid === null) continue;
+    const best = winners.get(d.prop);
+    if (!best || d.important || !best.important) winners.set(d.prop, d);
+  }
+  return [...winners].map(([prop, d]) => ({
+    prop,
+    value: d.value,
+    important: d.important,
+    origin: "sheet",
+    specificity: null,
+    order,
+  }));
+}
+
+/**
+ * The declarations of a block with any nested rules (`&.open { … }`) cut out,
+ * so a declaration inside a nested rule is never read as the outer rule's.
+ */
+function withoutNestedRules(body: string): string {
+  if (!body.includes("{")) return body;
+  let out = "";
+  let boundary = 0;
+  let depth = 0;
+  let i = 0;
+  while (i < body.length) {
+    const c = body[i];
+    if (c === '"' || c === "'") {
+      const end = skipString(body, i);
+      if (depth === 0) out += body.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (c === "/" && body[i + 1] === "*") {
+      const close = body.indexOf("*/", i + 2);
+      i = close === -1 ? body.length : close + 2;
+      continue;
+    }
+    if (c === "{") {
+      // Drop the nested rule's selector, written since the last boundary.
+      if (depth === 0) out = out.slice(0, boundary);
+      depth++;
+    } else if (c === "}") {
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) boundary = out.length;
+    } else if (depth === 0) {
+      out += c;
+      if (c === ";") boundary = out.length;
+    }
+    i++;
+  }
+  return out;
+}
+
+interface IndexContext {
+  index: StyleIndex;
+  condition: Exclude<Condition, "never">;
+  /** Inside @layer or @scope the cascade is not modelled. */
+  cascadeKnown: boolean;
+  order: number;
+}
+
+/** Indexes one selector list against its winning declarations. Returns how many selectors it added. */
+function indexSelectorList(ctx: IndexContext, selectorList: string, decls: Decl[]): number {
+  const entries: Array<{ selector: ComplexSelector | null; subject: Compound }> = [];
+  let listInvalid = false;
+  for (const selectorText of splitSelectorList(stripSelectorComments(selectorList))) {
+    if (selectorText === "") {
+      listInvalid = true;
+      continue;
+    }
+    try {
+      const parsed = parseComplex(selectorText);
+      if (parsed === PSEUDO_ELEMENT) continue;
+      if (parsed === UNKNOWN_PSEUDO_ELEMENT) {
+        listInvalid = true;
+        continue;
+      }
+      entries.push({ selector: parsed, subject: parsed.compounds[parsed.compounds.length - 1] });
+    } catch (err) {
+      if (!(err instanceof SelectorSyntaxError)) throw err;
+      listInvalid = true;
+      entries.push({ selector: null, subject: looseSubject(selectorText) });
     }
   }
-  const decls: Decl[] = [];
-  for (const [prop, d] of [
-    ["display", display],
-    ["visibility", visibility],
-  ] as const) {
-    if (d)
-      decls.push({
-        prop,
-        value: d.value,
-        important: d.important,
-        origin: "sheet",
-        specificity: null,
-        order,
-      });
+  for (const { selector, subject } of entries) {
+    const specificity = ctx.cascadeKnown ? (selector?.specificity ?? null) : null;
+    addToIndex(ctx.index, {
+      selector,
+      subject,
+      decls: decls.map((d) => ({ ...d, specificity })),
+      condition: ctx.condition,
+      approx: listInvalid ? "selector" : null,
+    });
   }
-  return decls;
+  return entries.length;
+}
+
+/**
+ * Nested rules, one level deep, rewritten as the flat rules CSS nesting means:
+ * `&` stands for `:is(<parent list>)`, and a nested selector without `&` is a
+ * descendant of the parent. A nested rule under an at-rule only may apply.
+ * Deeper nesting stays inside the nested body, where its declarations are cut
+ * out like any nested rule's.
+ */
+function indexNestedRules(ctx: IndexContext, parentList: string, body: string): number {
+  const parent = `:is(${stripSelectorComments(parentList)})`;
+  const nested = parseRules(body, MAX_STYLE_RULES);
+  let added = 0;
+  for (const [k, rule] of nested.entries()) {
+    if (!HIDING_PROPERTY.test(rule.body)) continue;
+    const decls = blockWinners(
+      withoutNestedRules(rule.body),
+      ctx.order + (k + 1) / (nested.length + 1),
+    );
+    if (decls.length === 0) continue;
+    const list = splitSelectorList(rule.selector)
+      .map((sel) => (sel.includes("&") ? sel.replaceAll("&", parent) : sel && `${parent} ${sel}`))
+      .join(", ");
+    const nestedCtx: IndexContext =
+      rule.atDepth > 0 ? { ...ctx, condition: "conditional", cascadeKnown: false } : ctx;
+    added += indexSelectorList(nestedCtx, list, decls);
+  }
+  return added;
 }
 
 function buildStyleIndex(doc: Document): StyleIndex {
@@ -1047,7 +1201,8 @@ function buildStyleIndex(doc: Document): StyleIndex {
     for (const rule of parseRules(text, ruleBudget)) {
       ruleBudget--;
       order++;
-      if (!/display|visibility/i.test(rule.body)) continue;
+      if (indexed > MAX_INDEXED_SELECTORS) break;
+      if (!HIDING_PROPERTY.test(rule.body)) continue;
       const condition = combineConditions([
         elementCondition,
         ...rule.atRules.map((prelude) => atRuleCondition(stripPreludeComments(prelude))),
@@ -1055,52 +1210,20 @@ function buildStyleIndex(doc: Document): StyleIndex {
         rule.atDepth > rule.atRules.length ? "conditional" : "always",
       ]);
       if (condition === "never") continue;
+      const ctx: IndexContext = {
+        index,
+        condition,
+        cascadeKnown:
+          rule.atDepth === rule.atRules.length &&
+          rule.atRules.every((prelude) =>
+            /^@(?:-[a-z]+-)?(?:media|supports|container)\b/i.test(stripPreludeComments(prelude)),
+          ),
+        order,
+      };
 
-      const decls = blockWinners(rule.body, order);
-      if (decls.length === 0) continue;
-      // Inside @layer or @scope the cascade is not modelled: a matching rule
-      // there may beat any other, whatever its specificity.
-      const cascadeKnown =
-        rule.atDepth === rule.atRules.length &&
-        rule.atRules.every((prelude) =>
-          /^@(?:-[a-z]+-)?(?:media|supports|container)\b/i.test(stripPreludeComments(prelude)),
-        );
-
-      const entries: Array<{ selector: ComplexSelector | null; subject: Compound }> = [];
-      let listInvalid = false;
-      for (const selectorText of splitSelectorList(stripSelectorComments(rule.selector))) {
-        if (selectorText === "") {
-          listInvalid = true;
-          continue;
-        }
-        try {
-          const parsed = parseComplex(selectorText);
-          if (parsed === PSEUDO_ELEMENT) continue;
-          if (parsed === UNKNOWN_PSEUDO_ELEMENT) {
-            listInvalid = true;
-            continue;
-          }
-          entries.push({
-            selector: parsed,
-            subject: parsed.compounds[parsed.compounds.length - 1],
-          });
-        } catch (err) {
-          if (!(err instanceof SelectorSyntaxError)) throw err;
-          listInvalid = true;
-          entries.push({ selector: null, subject: looseSubject(selectorText) });
-        }
-      }
-      for (const { selector, subject } of entries) {
-        if (++indexed > MAX_INDEXED_SELECTORS) break;
-        const specificity = cascadeKnown ? (selector?.specificity ?? null) : null;
-        addToIndex(index, {
-          selector,
-          subject,
-          decls: decls.map((d) => ({ ...d, specificity })),
-          condition,
-          approx: listInvalid ? "selector" : null,
-        });
-      }
+      const decls = blockWinners(withoutNestedRules(rule.body), order);
+      if (decls.length > 0) indexed += indexSelectorList(ctx, rule.selector, decls);
+      if (rule.body.includes("{")) indexed += indexNestedRules(ctx, rule.selector, rule.body);
     }
   }
 
@@ -1152,10 +1275,9 @@ function appliedDecls(index: StyleIndex, el: Element, page: { steps: number }): 
   const inline = getAttrCI(el, "style");
   if (inline) {
     let order = 0;
-    for (const d of scanDeclarations(inline, { stripComments: true })) {
-      if (d.prop !== "display" && d.prop !== "visibility") continue;
+    for (const d of hidingDeclarations(inline)) {
       applied.push({
-        decl: { ...d, prop: d.prop, origin: "inline", specificity: [0, 0, 0], order: order++ },
+        decl: { ...d, origin: "inline", specificity: [0, 0, 0], order: order++ },
         may: null,
         variant: false,
       });

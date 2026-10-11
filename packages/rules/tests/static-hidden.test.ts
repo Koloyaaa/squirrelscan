@@ -421,3 +421,49 @@ describe("static-hidden: second review round", () => {
     expect(last.state).toBe("unknown");
   });
 });
+
+describe("static-hidden: third review round", () => {
+  test("CSS nesting: a nested rule is read as the flat rule it means", () => {
+    const head = "<style>.panel{display:none;&.open{display:block}}</style>";
+    expect(verdict('<b id="t" class="panel open"></b>', head)).toBe("shown");
+    expect(verdict('<b id="t" class="panel"></b>', head)).toBe("hidden");
+    // Without &, a nested selector is a descendant of the parent.
+    expect(
+      verdict(
+        '<div class="menu"><b id="t" class="item"></b></div>',
+        "<style>.menu{color:red;.item{display:none}}</style>",
+      ),
+    ).toBe("hidden");
+    // A declaration inside a nested rule is never read as the parent's.
+    expect(
+      verdict(
+        '<b id="t" class="card"></b>',
+        "<style>.card{display:block;&:hover{color:red;display:none;margin:0}}</style>",
+      ),
+    ).toBe("unknown:interactive");
+  });
+
+  test("the all shorthand resets display and visibility", () => {
+    expect(verdict('<b id="t"></b>', "<style>b{display:none;all:initial}</style>")).toBe("shown");
+    expect(verdict('<b id="t"></b>', "<style>b{all:initial;display:none}</style>")).toBe("hidden");
+    expect(verdict('<b id="t" style="visibility:hidden;all:unset"></b>')).toBe("shown");
+  });
+
+  test("a hex escape and its terminating space are one character in a loosely read subject", () => {
+    expect(
+      verdict(
+        '<b id="t" class="foo"></b>',
+        "<style>b{display:none}*|b.\\66 oo{display:block}</style>",
+      ),
+    ).toBe("unknown:selector");
+  });
+
+  test("a comment inside a quoted attribute value is text", () => {
+    expect(
+      verdict(
+        '<b id="t" data-x="a/*x*/b"></b>',
+        '<style>b:not([data-x="a/*x*/b"]){display:none}</style>',
+      ),
+    ).toBe("shown");
+  });
+});
