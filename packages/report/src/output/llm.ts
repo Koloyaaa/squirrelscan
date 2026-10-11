@@ -22,7 +22,7 @@ import {
   primaryEntities,
   stableIdPercent,
 } from "../entities";
-import { seedRedirect } from "../coverage";
+import { publishedReportNote, seedRedirect } from "../coverage";
 import { LLM_REPORT } from "@squirrelscan/core-contracts/limits";
 import { stripControlChars } from "@squirrelscan/core-contracts/control-chars";
 import { AUDIT_FAILURE_NEXT_STEP_THIRD } from "@squirrelscan/core-contracts/failure-reason";
@@ -254,6 +254,12 @@ export function renderLlm(report: AuditReport, options?: LlmRenderOptions): stri
     );
   }
 
+  // repo#2661: a capped published report lists a sample of each issue's pages
+  // and items beside the true counts. Escaped like every other value here: the
+  // numbers in it come off the report's own JSON.
+  const capped = publishedReportNote(report);
+  if (capped) lines.push(`<published-summary>${escapeXml(capped)}</published-summary>`);
+
   // The audit level, so an agent knows what kind of audit the score rests on
   // and which settings were changed from the level (a custom audit). The
   // changed setting keys are the core-contracts AuditSettings names.
@@ -434,16 +440,25 @@ export function renderLlm(report: AuditReport, options?: LlmRenderOptions): stri
       }
   
       const allItems: CheckItem[] = [];
+      // repo#2661: items a capped (or clamped) check left out still count.
+      // `details.additional` is always items LEFT OUT of `items`: the fold's and
+      // the publish clamp's dropped count, and every rule's own "first N items,
+      // the rest as additional" remainder (rules/src/shared/sample-items.ts and
+      // the a11y rules' slice(0, 10)). So listed + additional is the total.
+      let itemsLeftOut = 0;
       for (const check of rule.checks) {
         if (check.items && check.items.length > 0) allItems.push(...check.items);
+        const additional = check.details?.additional;
+        if (typeof additional === "number" && additional > 0) itemsLeftOut += Math.floor(additional);
       }
   
       if (allItems.length > 0) {
         const sampledItems = allItems.slice(0, LLM_REPORT.maxItems);
+        const itemsTotal = allItems.length + itemsLeftOut;
         lines.push(
-          sampledItems.length < allItems.length
-            ? `${indent(2)}Items (${sampledItems.length}/${allItems.length}):`
-            : `${indent(2)}Items (${allItems.length}):`,
+          sampledItems.length < itemsTotal
+            ? `${indent(2)}Items (${sampledItems.length}/${itemsTotal}):`
+            : `${indent(2)}Items (${itemsTotal}):`,
         );
   
         for (const item of sampledItems) {
