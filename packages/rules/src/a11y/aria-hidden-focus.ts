@@ -118,14 +118,14 @@ export const ariaHiddenFocusRule: Rule = {
     const visibility = createStaticVisibility(doc, { ariaHidden: false });
 
     /**
-     * Files a focusable element under the finding it belongs to. Called only
-     * for what used to be a finding, so CSS can only clear one or make it
-     * unconfirmed, never add one.
+     * Files a focusable element under the finding it belongs to, and says
+     * whether it did. Called only for what used to be a finding, so CSS can
+     * only clear one or make it unconfirmed.
      */
-    const classify = (el: Element, label: string): void => {
+    const classify = (el: Element, label: string): boolean => {
       const seen = visibility.visibility(el);
       // display:none or visibility:hidden from the page's CSS: not focusable.
-      if (seen.state === "hidden") return;
+      if (seen.state === "hidden") return false;
       if (isHoneypotCandidate(el)) {
         honeypotInHidden.push(labelFor(el));
       } else if (seen.state === "unknown") {
@@ -133,6 +133,7 @@ export const ariaHiddenFocusRule: Rule = {
       } else {
         focusableInHidden.push(label);
       }
+      return true;
     };
 
     for (const hidden of hiddenElements) {
@@ -140,9 +141,13 @@ export const ariaHiddenFocusRule: Rule = {
       // a keyboard user can reach.
       if (isOutOfFocusTree(hidden, null)) continue;
 
-      // Check if the hidden element itself is focusable
-      if (isFocusable(hidden)) {
-        classify(hidden, `${hidden.tagName.toLowerCase()} (self is focusable)`);
+      // Check if the hidden element itself is focusable. A container CSS
+      // hides is not, but a descendant can show itself again
+      // (`visibility:visible`), so its descendants are checked instead.
+      if (
+        isFocusable(hidden) &&
+        classify(hidden, `${hidden.tagName.toLowerCase()} (self is focusable)`)
+      ) {
         continue;
       }
 

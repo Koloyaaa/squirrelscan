@@ -105,6 +105,15 @@ describe("a11y/aria-hidden-focus: static CSS", () => {
     expect(check(checks, "aria-hidden-focus")?.items).toEqual([{ id: "a#back" }]);
   });
 
+  test("a focusable container CSS hides still has its visible descendants checked", () => {
+    const checks = run(
+      fixture(
+        `<div aria-hidden="true" tabindex="0" style="visibility:hidden"><button id="open" style="visibility:visible">Open</button></div>`,
+      ),
+    );
+    expect(check(checks, "aria-hidden-focus")?.items).toEqual([{ id: "button#open" }]);
+  });
+
   test("a later, more specific rule that shows the container again keeps the failure", () => {
     // Bootstrap's open modal: `.modal` hides it, `.modal.show` shows it.
     const checks = run(
