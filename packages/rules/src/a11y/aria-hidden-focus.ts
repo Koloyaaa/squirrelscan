@@ -1,8 +1,10 @@
 // a11y/aria-hidden-focus - Aria-hidden not on focusable elements
 
-import type { CheckResult, Rule, RuleContext, RuleResult } from "../types";
+import type { CheckItem, CheckResult, Rule, RuleContext, RuleResult } from "../types";
 
 import { getAttrCI, hasAttrCI } from "@squirrelscan/utils";
+
+import { createStaticVisibility, UNKNOWN_REASON_LABELS } from "../shared/static-hidden";
 
 // Natively focusable elements. `disabled`, `type="hidden"` and tabindex are
 // decided in isFocusable, case-insensitively, rather than in the selectors.
@@ -34,8 +36,8 @@ function parseTabindex(el: Element): number | null {
  * Whether a keyboard user can Tab to the element, following axe-core: a disabled
  * form control never can, a negative tabindex takes it out of the tab order, a
  * tabindex of 0 or more puts it in, and otherwise native focusability decides.
- * Handles React's camelCase tabIndex via the CI helpers. Ancestors (inert,
- * hidden) are checked separately by isOutOfFocusTree.
+ * Handles React's camelCase tabIndex via the CI helpers. Ancestors are checked
+ * separately: `inert` by isInert, hiding by the shared static visibility check.
  */
 function isFocusable(el: Element): boolean {
   const tag = el.tagName.toLowerCase();
@@ -47,16 +49,13 @@ function isFocusable(el: Element): boolean {
 }
 
 /**
- * Whether `inert`, or `hidden` other than `hidden="until-found"`, removes the
- * element from focus: set on the element itself or on any ancestor below
- * `stop` (pass null to walk to the root). Either takes the whole subtree out of
- * the tab order, so nothing under it can be reached with Tab (#456).
+ * Whether `inert` is set on the element itself or on any ancestor below `stop`
+ * (pass null to walk to the root). It takes the whole subtree out of the tab
+ * order, so nothing under it can be reached with Tab (#456).
  */
-function isOutOfFocusTree(el: Element, stop: Element | null): boolean {
+function isInert(el: Element, stop: Element | null): boolean {
   for (let node: Element | null = el; node && node !== stop; node = node.parentElement) {
     if (hasAttrCI(node, "inert")) return true;
-    const hidden = getAttrCI(node, "hidden");
-    if (hidden !== null && hidden.toLowerCase() !== "until-found") return true;
   }
   return false;
 }
@@ -91,7 +90,7 @@ export const ariaHiddenFocusRule: Rule = {
     name: "ARIA Hidden Focus",
     description: "Ensures aria-hidden elements do not contain focusable content",
     solution:
-      "Elements with aria-hidden='true' should not contain focusable content. When an element is hidden from assistive technology but still focusable, keyboard users can tab to it but screen reader users won't know what they're interacting with. Either remove aria-hidden, add the inert attribute to the hidden container (which takes its whole subtree out of focus), or make each focusable child non-focusable with tabindex='-1'.",
+      "Elements with aria-hidden='true' should not contain focusable content. When an element is hidden from assistive technology but still focusable, keyboard users can tab to it but screen reader users won't know what they're interacting with. Either remove aria-hidden, add the inert attribute to the hidden container (which takes its whole subtree out of focus), or make each focusable child non-focusable with tabindex='-1'. A control hidden with display:none, visibility:hidden or the hidden attribute is not focusable and is not reported. squirrel reads inline styles and the page's own <style> blocks, not external stylesheets, so a control hidden only by an external stylesheet is still reported, and one the page's CSS may or may not hide (a media query, a :hover rule) is reported as unconfirmed.",
     category: "a11y",
     scope: "page",
     verdictScope: "page",
@@ -108,33 +107,41 @@ export const ariaHiddenFocusRule: Rule = {
     const hiddenElements = doc.querySelectorAll('[aria-hidden="true"]');
     const focusableInHidden: string[] = [];
     const honeypotInHidden: string[] = [];
+    // Focusable unless the page's CSS hides them, which a static read cannot
+    // settle (pub#664): reported as candidates, not as failures.
+    const unconfirmed: CheckItem[] = [];
+    // aria-hidden is what this rule is about, so it does not count as hiding.
+    const visibility = createStaticVisibility(doc, { ariaHidden: false });
+
+    /** Files a focusable element under the finding it belongs to. */
+    const classify = (el: Element, label: string): void => {
+      const seen = visibility.visibility(el);
+      // display:none, visibility:hidden or the hidden attribute: not focusable.
+      if (seen.state === "hidden") return;
+      if (isHoneypotCandidate(el)) {
+        honeypotInHidden.push(labelFor(el));
+      } else if (seen.state === "unknown") {
+        unconfirmed.push({ id: label, label: UNKNOWN_REASON_LABELS[seen.reason] });
+      } else {
+        focusableInHidden.push(label);
+      }
+    };
 
     for (const hidden of hiddenElements) {
-      // An inert or hidden region (or one inside such an ancestor) has nothing
-      // a keyboard user can reach.
-      if (isOutOfFocusTree(hidden, null)) continue;
+      // An inert region (or one inside an inert ancestor) has nothing a
+      // keyboard user can reach.
+      if (isInert(hidden, null)) continue;
 
       // Check if the hidden element itself is focusable
-      if (isFocusable(hidden)) {
-        if (isHoneypotCandidate(hidden)) {
-          honeypotInHidden.push(labelFor(hidden));
-        } else {
-          focusableInHidden.push(`${hidden.tagName.toLowerCase()} (self is focusable)`);
-        }
+      if (isFocusable(hidden) && visibility.visibility(hidden).state !== "hidden") {
+        classify(hidden, `${hidden.tagName.toLowerCase()} (self is focusable)`);
         continue;
       }
 
       // Check for focusable children
-      const allChildren = hidden.querySelectorAll("*");
-      for (const child of allChildren) {
-        if (!isFocusable(child) || isOutOfFocusTree(child, hidden)) continue;
-
-        const label = labelFor(child);
-        if (isHoneypotCandidate(child)) {
-          honeypotInHidden.push(label);
-        } else {
-          focusableInHidden.push(label);
-        }
+      for (const child of hidden.querySelectorAll("*")) {
+        if (!isFocusable(child) || isInert(child, hidden)) continue;
+        classify(child, labelFor(child));
       }
     }
 
@@ -162,7 +169,21 @@ export const ariaHiddenFocusRule: Rule = {
       });
     }
 
-    if (focusableInHidden.length === 0 && honeypotInHidden.length === 0) {
+    if (unconfirmed.length > 0) {
+      checks.push({
+        name: "aria-hidden-focus-unconfirmed",
+        status: "warn",
+        message: `${unconfirmed.length} focusable element(s) inside aria-hidden may be hidden by the page's CSS (unconfirmed)`,
+        items: unconfirmed.slice(0, 10),
+        details: unconfirmed.length > 10 ? { additional: unconfirmed.length - 10 } : undefined,
+      });
+    }
+
+    if (
+      focusableInHidden.length === 0 &&
+      honeypotInHidden.length === 0 &&
+      unconfirmed.length === 0
+    ) {
       if (hiddenElements.length > 0) {
         checks.push({
           name: "aria-hidden-focus",

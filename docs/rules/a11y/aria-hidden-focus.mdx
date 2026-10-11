@@ -11,9 +11,10 @@ The two states have to agree. Either the region is available, in which case it s
 
 ## What squirrel checks
 
-Two checks, at rule severity error. The rule walks every `[aria-hidden="true"]` element and tests the element itself first. A focusable container is reported and its descendants are not examined; otherwise every descendant is tested.
+Three checks, at rule severity error. The rule walks every `[aria-hidden="true"]` element and tests the element itself first. A focusable container is reported and its descendants are not examined; otherwise every descendant is tested.
 
 - `aria-hidden-focus` fails with `N focusable element(s) inside aria-hidden`. Items read `a#archive`, or `div (self is focusable)` when the hidden container is itself focusable. Up to ten are listed with a count of the rest.
+- `aria-hidden-focus-unconfirmed` warns with `N focusable element(s) inside aria-hidden may be hidden by the page's CSS (unconfirmed)`. These are elements the page's own CSS may or may not hide, in a way squirrel cannot settle from the markup (see [What squirrel can see](#what-squirrel-can-see)). Each item carries a label saying why, such as a `:hover` rule that may show the container again.
 - `aria-hidden-focus-honeypot` warns with `N focusable element(s) inside aria-hidden appear to be an anti-spam honeypot`, carrying the value `Add tabindex="-1" (and autocomplete="off") to remove the honeypot from the tab order`. An element qualifies only when all three hold: it is an `<input>`, its `id` or `name` contains `hp`, `honeypot` or `trap` as a hyphen- or underscore-delimited token, and it sits inside a `<form>`. Requiring all three keeps a genuine bug on an unrelated hidden control from being quietly downgraded.
 - With nothing focusable found, the check passes as `No focusable elements inside aria-hidden regions`, or returns info with `No aria-hidden elements found`.
 
@@ -25,8 +26,23 @@ Focusable means reachable with the Tab key. The test follows axe-core's rule of 
 - Without a `tabindex`, an element is focusable when it matches `a[href]`, `button`, `input`, `select`, `textarea`, `[contenteditable="true"]`, `audio[controls]`, `video[controls]` or `details > summary`.
 - A `button`, `input`, `select` or `textarea` with `disabled` is never focusable, and neither is `<input type="hidden">`.
 - Nothing inside an `inert` element is focusable, and neither is anything inside a `hidden` element (except `hidden="until-found"`). That covers `inert` or `hidden` on the `aria-hidden` container itself, on an ancestor of it, or on a wrapper inside it.
+- Nothing that CSS hides is focusable: `display: none` on the element or any ancestor, or `visibility: hidden` (or `collapse`) that the element inherits. A descendant that sets `visibility: visible` again is focusable. A closed `<dialog>` and an unopened `popover` count as hidden too, because the browser's own stylesheet hides them.
+- Content that is only moved off-screen, clipped, shrunk to nothing or made transparent (`opacity: 0`) can still be reached with Tab, so it is still reported.
 
 Attribute lookups are case-insensitive, so React's `tabIndex` in server-rendered markup is read.
+
+### What squirrel can see
+
+squirrel reads CSS from inline `style` attributes and from the page's own `<style>` blocks, and resolves the cascade between them: specificity, source order and `!important`. It does not fetch external stylesheets. A control hidden only by a linked stylesheet is still reported, so check those findings in a browser, or add `inert` to the hidden container, which clears the finding and is the better fix anyway.
+
+Some CSS in the page cannot be settled from the markup alone. When a rule like that may decide whether the element is hidden, the element is reported by `aria-hidden-focus-unconfirmed` rather than as a failure:
+
+- a rule inside `@media` (one that may show a hidden container), `@supports`, `@layer`, or a `<noscript>` block;
+- a rule for an interaction state, such as `:hover`, `:focus`, `:focus-within`, `:target` or `:checked`;
+- a selector squirrel does not evaluate, such as `:has()` or `:nth-child()`;
+- a `display` or `visibility` set through a CSS variable.
+
+A media query that only hides a container on some screens does not count: the content is focusable everywhere else, so it is still a failure. A rule under `@media print` is ignored.
 
 ## How to fix it
 
@@ -44,7 +60,7 @@ Either drop `aria-hidden` from the container, add `inert` to it, or set `tabinde
 </div>
 ```
 
-Where the region is meant to be invisible as well, `display: none` or the `hidden` attribute is the better fix. Neither leaves the element focusable, so the two states cannot drift apart again. squirrel reads the `hidden` attribute but not CSS, so a region hidden only by a stylesheet rule or an inline `style` is still reported; `hidden` or `inert` in the markup clears it.
+Where the region is meant to be invisible as well, `display: none` or the `hidden` attribute is the better fix. Neither leaves the element focusable, so the two states cannot drift apart again. squirrel sees `display: none` set inline or in a `<style>` block on the page, but not in an external stylesheet, so a region hidden only by a linked stylesheet is still reported; `hidden` or `inert` in the markup clears it.
 
 | | |
 |---|---|
@@ -96,7 +112,7 @@ Accessibility findings ship in every audit next to the SEO, performance and agen
 
 ## Check your site
 
-Run `squirrel audit https://example.com` and open the Accessibility section of the report. Honeypot fields are reported separately, as warnings rather than errors. Signed-out local audits need no account and cost nothing. Signed-in audits spend credits.
+Run `squirrel audit https://example.com` and open the Accessibility section of the report. Honeypot fields and unconfirmed candidates are reported separately, as warnings rather than errors. Signed-out local audits need no account and cost nothing. Signed-in audits spend credits.
 
 <CardGroup cols={2}>
   <Card title="Install squirrel" icon="terminal" href="/quickstart">
