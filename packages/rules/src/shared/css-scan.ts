@@ -135,8 +135,8 @@ export interface RawRule {
   body: string;
   /**
    * The rule sits inside `@media`/`@supports`/`@layer`/`@keyframes`. Such a rule
-   * may not apply — `@media print { .no-print { display:none } }` hides
-   * nothing on screen — so content/hidden-text never applies it, and marks the
+   * may not apply (`@media print { .no-print { display:none } }` hides nothing
+   * on screen), so content/hidden-text never applies it, and marks the
    * selectors it names untrustworthy instead.
    */
   conditional: boolean;
