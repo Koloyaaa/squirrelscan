@@ -586,6 +586,14 @@ describe("static-hidden: hostile stylesheets degrade to unknown, never throw or 
     expect(boundedVerdict('<b id="t" a="b"></b>', `<style>${attr}</style>`)).not.toBe("hidden");
   });
 
+  test("floods of unclosed blocks and url( tokens stay linear and never hide", () => {
+    for (const junk of ["(".repeat(500_000), "[".repeat(500_000), "a{b:url(".repeat(100_000)]) {
+      expect(boundedVerdict('<b id="t"></b>', `<style>${junk}b{display:none}</style>`)).not.toBe(
+        "hidden",
+      );
+    }
+  });
+
   test("thousands of <style> elements", () => {
     const styles = "<style>.q{color:red}</style>".repeat(5_000);
     expect(boundedVerdict('<b id="t"></b>', styles)).toBe("unknown:truncated");
@@ -712,6 +720,60 @@ const DIFFERENTIALS: Array<{
     name: "HTML compares type= case-insensitively",
     css: 'input:not([type="BUTTON"]){display:none}',
     body: '<input id="t" type="button">',
+    browser: "shown",
+  },
+  // Blocks and url() tokens: `{`, `}` and `;` inside them are not structure
+  // (pub#675 review, checked in Chromium with getComputedStyle).
+  { name: "escaped `{` in a selector", css: ".q\\{}b{display:none}", browser: "shown" },
+  {
+    name: "unquoted url() swallows braces",
+    css: ".a{background:url(}b{display:none}.c{)}",
+    browser: "shown",
+  },
+  { name: "URL() in upper case", css: ".a{background:URL(}b{display:none}.c{)}", browser: "shown" },
+  {
+    name: "url( with a leading space",
+    css: ".a{background:url( }b{display:none}.c{)}",
+    browser: "shown",
+  },
+  { name: "a `(` block in a prelude swallows `}`", css: ".x(}b{display:none}", browser: "shown" },
+  { name: "a `[` block in a prelude swallows `}`", css: ".x[}b{display:none}", browser: "shown" },
+  { name: "escaped `}` in a value", css: ".a{color:red\\}b{display:none}", browser: "shown" },
+  { name: "`;` inside a `[` block in a value", css: "b{x:[;display:none;]}", browser: "shown" },
+  { name: "`;` inside a `(` block in a value", css: "b{x:(;display:none;)}", browser: "shown" },
+  { name: "`;` inside a `{` block in a value", css: "b{x:{;display:none;}}", browser: "shown" },
+  {
+    name: "`;` inside an unquoted url() value",
+    css: "b{background:url(a;display:none)}",
+    browser: "shown",
+  },
+  {
+    name: "a name ending in url( is a plain function",
+    css: ".myurl(}b{display:none}",
+    browser: "shown",
+  },
+  {
+    name: "quoted url() is a normal function",
+    css: '.a{background:url("x")}b{display:none}',
+    browser: "hidden",
+  },
+  // Escapes in selectors and values.
+  {
+    name: "escaped space ends up in the class name",
+    css: ".x\\ {display:none}",
+    body: '<b id="t" class="x"></b>',
+    browser: "shown",
+  },
+  {
+    name: "hex escape spelling the class",
+    css: ".\\78 {display:none}",
+    body: '<b id="t" class="x"></b>',
+    browser: "hidden",
+  },
+  { name: "hex escape spelling the keyword", css: "b{display:\\6e one}", browser: "hidden" },
+  {
+    name: "escape inside a keyword is not that keyword",
+    css: "b{display:no\\ ne}",
     browser: "shown",
   },
   // HTML parsing ends <style> at `</style>`, even inside a CSS string.
