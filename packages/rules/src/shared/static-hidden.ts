@@ -291,9 +291,11 @@ function decodeEscapes(raw: string): string {
 }
 
 function parseAttr(body: string): AttrTest {
+  // Trimmed first, so no two whitespace runs in the pattern can trade
+  // characters (that backtracks quadratically on a long run of spaces).
   const m =
-    /^\s*([-_a-zA-Z0-9]+)\s*(?:([~|^$*]?=)\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^\s"']+))\s*([iIsS])?\s*)?$/.exec(
-      body,
+    /^([-_a-zA-Z0-9]+)\s*(?:([~|^$*]?=)\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^\s"']+))(?:\s+([iIsS]))?)?$/.exec(
+      cssTrim(body),
     );
   if (!m) throw new SelectorSyntaxError();
   const value = decodeEscapes(m[3] ?? m[4] ?? m[5] ?? "");
@@ -1112,16 +1114,36 @@ interface HidingDeclaration {
 /** `display` and `visibility` declarations, with the `all` shorthand counted as both. */
 /** Trims CSS whitespace only: a no-break space is part of an identifier, not padding. */
 function cssTrim(text: string): string {
-  return text.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "");
+  // Index scans, not a regex: `[ws]+$` backtracks quadratically over a long
+  // run of spaces that is not at the end.
+  let start = 0;
+  let end = text.length;
+  while (start < end && isCssWhitespace(text.charCodeAt(start))) start++;
+  while (end > start && isCssWhitespace(text.charCodeAt(end - 1))) end--;
+  return start === 0 && end === text.length ? text : text.slice(start, end);
+}
+
+/** Tab, line feed, form feed, carriage return or space. */
+function isCssWhitespace(code: number): boolean {
+  return code === 9 || code === 10 || code === 12 || code === 13 || code === 32;
+}
+
+/**
+ * `value` without a trailing `!important` (CSS whitespace allowed around the
+ * `!`), or null when it has none. Read from the end, in linear time.
+ */
+function stripImportant(value: string): string | null {
+  const trimmed = cssTrim(value);
+  if (trimmed.length < 10 || asciiLower(trimmed.slice(-9)) !== "important") return null;
+  const beforeKeyword = cssTrim(trimmed.slice(0, -9));
+  if (!beforeKeyword.endsWith("!")) return null;
+  return cssTrim(beforeKeyword.slice(0, -1));
 }
 
 /** Lower-cases ASCII letters only, as CSS keyword matching does. */
 function asciiLower(text: string): string {
   return text.replace(/[A-Z]+/g, (m) => m.toLowerCase());
 }
-
-/** A trailing `!important`, with CSS whitespace (and comments, already spaces) around the `!`. */
-const IMPORTANT_SUFFIX = /![\t\n\f\r ]*important[\t\n\f\r ]*$/i;
 
 /**
  * `display` and `visibility` declarations, with the `all` shorthand counted as
@@ -1135,18 +1157,18 @@ function hidingDeclarations(css: string): HidingDeclaration[] {
   for (const d of scanDeclarations(css, { strict: true })) {
     const prop = asciiLower(cssTrim(d.rawProp));
     if (prop !== "display" && prop !== "visibility" && prop !== "all") continue;
-    let value = cssTrim(d.rawValue);
-    const important = IMPORTANT_SUFFIX.exec(value);
-    if (important) value = cssTrim(value.slice(0, important.index));
+    const withoutImportant = stripImportant(d.rawValue);
+    const important = withoutImportant !== null;
+    let value = withoutImportant ?? cssTrim(d.rawValue);
     if (value.includes("!") || value === "") continue;
     value = asciiLower(value);
     if (prop === "all") {
       if (!CSS_WIDE_KEYWORDS.has(value)) continue;
       // `all: initial` resets both, which shows an element `display:none` hid.
-      out.push({ prop: "display", value, important: important !== null });
-      out.push({ prop: "visibility", value, important: important !== null });
+      out.push({ prop: "display", value, important });
+      out.push({ prop: "visibility", value, important });
     } else {
-      out.push({ prop, value, important: important !== null });
+      out.push({ prop, value, important });
     }
   }
   return out;

@@ -579,6 +579,13 @@ describe("static-hidden: hostile stylesheets degrade to unknown, never throw or 
     }
   });
 
+  test("long whitespace runs inside values and attribute selectors stay linear", () => {
+    const value = `b{display:none${" ".repeat(500_000)}x}`;
+    expect(boundedVerdict('<b id="t"></b>', `<style>${value}</style>`)).toBe("shown");
+    const attr = `[a=b${" ".repeat(4_000)}x]{display:none}`.repeat(200);
+    expect(boundedVerdict('<b id="t" a="b"></b>', `<style>${attr}</style>`)).not.toBe("hidden");
+  });
+
   test("thousands of <style> elements", () => {
     const styles = "<style>.q{color:red}</style>".repeat(5_000);
     expect(boundedVerdict('<b id="t"></b>', styles)).toBe("unknown:truncated");
