@@ -17,6 +17,10 @@ How it works:
 
 ## [Unreleased]
 
+### Changed
+
+- `links/broken-links` says where on the page a broken internal link sits (the footer, the navigation, the comments, the page content), from landmarks and comment-thread markup. Each item also carries `meta.sections` counts.
+
 ### Fixed
 
 - The HTML, markdown and text reports now say how many items a check left out, not only how many they list. A published report keeps 5 items per issue, so an issue with 1,147 items used to read "5 items" there. It now reads "5 items, 1,142 more not listed" (the text format prints `... and 1,142 more items not listed` after the list). An issue the report keeps no items for at all, as on a very large site, says "1,500 items not listed" where it used to say nothing. The count comes from the check's `details.additional`, which the JSON and LLM formats already reported. A check with nothing left out reads as before. See [Output formats via URL](https://docs.squirrelscan.com/reports#output-formats-via-url).

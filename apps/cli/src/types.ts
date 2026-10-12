@@ -289,6 +289,8 @@ export interface LinkData {
   isNofollow?: boolean;
   /** Anchor sat in a `nav`/`header`/`footer`/`aside` landmark (#109). */
   isChrome?: boolean;
+  /** Part of the page the anchor sat in (#2307). */
+  section?: import("@squirrelscan/core-contracts").LinkSection;
 }
 
 export interface ResourceSizeData {

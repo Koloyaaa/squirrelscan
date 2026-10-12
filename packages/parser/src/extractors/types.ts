@@ -8,11 +8,14 @@ import type {
   HeadingHierarchy,
   ImageData,
   LinkData,
+  LinkSection,
   MetaData,
   OpenGraphData,
   SchemaData,
   TwitterData,
 } from "@squirrelscan/core-contracts";
+
+export type { LinkSection };
 
 export type LinkPosition =
   | "header"
@@ -48,6 +51,8 @@ export interface ExtractedLink {
    * which also matches on class/id substrings.
    */
   isChrome: boolean;
+  /** Part of the page the anchor sits in; see ./link-section.ts. */
+  section: LinkSection;
 }
 
 // Extended image data

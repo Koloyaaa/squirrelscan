@@ -1450,6 +1450,19 @@ export interface SchemaData {
   raw: string | null;
 }
 
+/**
+ * Which part of a page an anchor sits in, for findings ("broken link in the footer"). Landmark tags
+ * and ARIA roles plus a markup-only comment-thread rule (parser `link-section.ts`).
+ */
+export type LinkSection =
+  | "header"
+  | "footer"
+  | "navigation"
+  | "sidebar"
+  | "comments"
+  | "content"
+  | "unknown";
+
 export interface LinkData {
   url: string;
   text: string;
@@ -1466,6 +1479,11 @@ export interface LinkData {
    * behaviour (every link contextual) instead of flagging the whole site.
    */
   isChrome?: boolean;
+  /**
+   * Part of the page the anchor sat in (#2307). Optional: crawls stored before this field existed
+   * omit it; readers treat `undefined` as unknown and say nothing about placement.
+   */
+  section?: LinkSection;
 }
 
 /**

@@ -19,6 +19,7 @@ const logger = {
 import type { ExtractedLink, LinkPosition } from "./types";
 
 import { isInSiteChrome } from "./chrome";
+import { makeSectionResolver } from "./link-section";
 
 /**
  * Detect link position in document structure.
@@ -117,6 +118,7 @@ export function extractLinks(doc: Document, baseUrl: string): ExtractedLink[] {
   const anchors = doc.querySelectorAll("a[href]");
   const links: ExtractedLink[] = [];
   const baseUrlObj = new URL(baseUrl);
+  const sectionOf = makeSectionResolver();
 
   for (const anchor of anchors) {
     const element = anchor as Element;
@@ -148,6 +150,7 @@ export function extractLinks(doc: Document, baseUrl: string): ExtractedLink[] {
         isNofollow: hasNofollow(rel),
         // Landmark-strict, unlike `position` above (#109) — see ./chrome.ts.
         isChrome: isInSiteChrome(element),
+        section: sectionOf(element),
       });
     } catch {
       // Skip invalid URLs

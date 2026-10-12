@@ -9,6 +9,17 @@ import {
 import { isCloudflareEmailProtectionUrl, normalizeUrl } from "@squirrelscan/utils";
 import { isRateLimitStatus } from "@squirrelscan/utils/rate-limit";
 
+import { countSection, sectionPhrase, type SectionCounts } from "./link-section-label";
+
+function withSection(label: string, counts: SectionCounts | undefined): string {
+  const phrase = counts ? sectionPhrase(counts) : "";
+  return phrase ? `${label}, linked ${phrase}` : label;
+}
+
+function sectionMeta(counts: SectionCounts | undefined): { sections?: SectionCounts } {
+  return counts && Object.keys(counts).length > 0 ? { sections: counts } : {};
+}
+
 export const brokenLinksRule: Rule = {
   meta: {
     id: "links/broken-links",
@@ -43,6 +54,8 @@ export const brokenLinksRule: Rule = {
     // links; a parse stored before it did still has them here. Counted either
     // way, so the skip is visible.
     let emailProtectionLinks = 0;
+    // #2307: where on its source pages each target was linked from (the footer, the comments, ...).
+    const targetSections = new Map<string, SectionCounts>();
 
     for (const page of pages) {
       for (const link of page.parsed.links) {
@@ -54,6 +67,9 @@ export const brokenLinksRule: Rule = {
           const sources = linkTargets.get(link.url) || [];
           sources.push(page.url);
           linkTargets.set(link.url, sources);
+          let counts = targetSections.get(link.url);
+          if (!counts) targetSections.set(link.url, (counts = {}));
+          countSection(counts, link.section);
         }
       }
       for (const contact of page.parsed.contactLinks ?? []) {
@@ -214,10 +230,11 @@ export const brokenLinksRule: Rule = {
         message: `${brokenLinks.length} broken internal link(s) (4xx/5xx)`,
         items: brokenLinks.map((b) => ({
           id: b.url,
-          label: `${b.url} (${b.statusCode})`,
+          label: withSection(`${b.url} (${b.statusCode})`, targetSections.get(b.url)),
           sourcePages: b.sources,
           meta: {
             statusCode: b.statusCode,
+            ...sectionMeta(targetSections.get(b.url)),
             linkedFrom: b.sources.length,
             ...(b.probed ? { probed: true } : {}),
           },

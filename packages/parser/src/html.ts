@@ -32,6 +32,7 @@ import type {
 } from "@squirrelscan/core-contracts";
 
 import { isInSiteChrome } from "./extractors/chrome";
+import { makeSectionResolver } from "./extractors/link-section";
 import { isHiddenFromMarkup } from "./hidden-markup";
 
 import type { AuthorInfo } from "./schema";
@@ -168,6 +169,7 @@ export function extractLinks(doc: Document, baseUrl: string): LinkData[] {
   const anchors = doc.querySelectorAll("a[href]");
   const links: LinkData[] = [];
   const baseUrlObj = new URL(baseUrl);
+  const sectionOf = makeSectionResolver();
 
   const shouldSkip = (href: string): boolean => {
     return shouldSkipUrl(href);
@@ -192,7 +194,7 @@ export function extractLinks(doc: Document, baseUrl: string): LinkData[] {
       // matters. Cheap: an ancestor tagName walk, no attribute reads.
       const isChrome = isInSiteChrome(anchor as Element);
 
-      links.push({ url, text, isInternal, isChrome });
+      links.push({ url, text, isInternal, isChrome, section: sectionOf(anchor as Element) });
     } catch {
       // Skip invalid URLs
       links.push({
