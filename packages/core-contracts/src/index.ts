@@ -238,6 +238,7 @@ export type RuleCategory =
   | "ax"
   | "blocking"
   | "gaps"
+  | "reliability"
   | "other";
 
 /**
