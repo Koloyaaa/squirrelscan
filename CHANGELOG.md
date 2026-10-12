@@ -21,10 +21,61 @@ How it works:
 
 - New rule `security/tls-certificate` reads the TLS certificate of each audited host with one handshake and reports its expiry (a warning inside 30 days, an error inside 7, set by `warn_days` and `error_days`), whether it covers the hostname, whether it has a complete chain to a trusted root, whether it is self-signed, and whether an RSA key is under 2048 bits. The www or apex counterpart is checked when it answers on the same port. A host the rule cannot read is reported as not checked, never as a pass, and local or private-network hosts are skipped. When a page fetch fails on a TLS error, the failure now names the cause the same handshake found, such as an expiry date or a missing intermediate, instead of listing every possibility. See [TLS certificate](https://docs.squirrelscan.com/rules/security/tls-certificate). squirrelscan/squirrelscan#712
 
+## v0.0.111 (2026-10-13)
+
+Broken links have nowhere left to hide. Every audit, Quick included, now status-checks the internal link targets its crawl did not fetch, so a linked 404 shows up even when it is not in your sitemap or sits past the page budget. External links stay opt-in at Quick, and there are new flags for both.
+
+Behaviour changes:
+
+- **squirrel sends requests it did not send before.** After the crawl, every audit sends a status-only `HEAD` to each internal link target the crawl did not fetch: up to 200 per audit, the links on the most pages first. Before those, it sends one `HEAD` to the audited URL, to see whether the server answers `HEAD` properly. These requests send no cookies, credentials or custom request headers, and never go to a link that looks like an action (log out, unsubscribe, delete, add to cart) or carries a token. Switch them off with `--no-internal-links` or `[internal_links] enabled = false`.
+- **Expect new `links/broken-links` findings**, and Links scores that move with them: Quick audits now find linked 404s their sitemap does not list, and Surface and Full audits find broken pages past their page budget.
+- **"Not checked" is narrower.** In 0.0.110 a Quick audit reported every internal link target it did not fetch as Not checked. Now that only covers the targets the status check did not answer: over the limit, outside the crawl scope or robots.txt, an action or token link, no answer, or a site whose `HEAD` answers cannot be trusted.
+- **External links:** which levels check them by default does not change. Surface and Full do, and Quick does not unless you pass `--external-links`. An audit that checks them now requests at most its page budget or 200 distinct external links, whichever is more.
+
+### Changed
+
+- Internal link checks run at every audit level, Quick included. Each internal link target the crawl did not fetch gets a status-only `HEAD` request, or a one-byte `GET` when the server answers `HEAD` with 405 or 501.
+  - The check covers up to 200 targets per audit, the links on the most pages first, inside the crawl scope and, when the crawl respects it, robots.txt. Change the limit with `[internal_links] max_targets`.
+  - It is free: no page is added, rendered or charged.
+  - A target that answers with 401 or 403 is recorded as unverifiable in an info-level `refused-links` check, never as broken. Reports do not list info checks yet.
+  - See [Link checking defaults](https://docs.squirrelscan.com/rules/links#link-checking-defaults).
+- The internal link check is built not to change anything on the site.
+  - It never requests a link that looks like an action (log out, unsubscribe, delete, confirm, add to cart) or carries a token. It re-checks every redirect hop against the same rules, and it sends no cookies, credentials or custom request headers.
+  - On a site that answers `HEAD` with an error on the audited URL, the targets' errors are not trusted, so they are never reported as broken.
+  - These rules are a careful default, not a guarantee. A site that changes state on `GET` requests to links that read like pages should switch the check off with `--no-internal-links`.
+  - See [What the internal link check never requests](https://docs.squirrelscan.com/configuration/external-links#what-the-internal-link-check-never-requests).
+- An audit that checks external links now requests at most its page budget or 200 distinct external links, whichever is more, the links on the most pages first. The rest are listed as **Not checked** (reason `external-links-over-cap`). Only sites that link out to more than that see a difference. Change the limit with `[external_links] max_links`.
+
+### Added
+
+- `--external-links` checks external links for one run at any level, Quick included, and `--no-external-links` skips them. `--no-internal-links` switches the internal link check off.
+  - `--external-links` cannot be combined with `--offline` or `--no-external-links`, and it overrides `[external_links] enabled = false`.
+  - At Quick it makes the audit custom, `custom (quick + external_links on)`.
+  - All three are in the shell completions.
+- The local MCP server's `audit_website` tool takes `externalLinks` and `internalLinks` switches. `offline: true` with `externalLinks: true` is refused, as on the command line.
+
+## v0.0.110 (2026-10-12)
+
+A small release with two fixes worth having. A site that answers with compression bombs no longer eats gigabytes of your memory while squirrel crawls and checks it: squirrel now decodes compressed responses itself, as it reads them, and stops at each read's size limit. And a Quick audit stops telling you your links are fine when it never checked them: those checks now say **Not checked**, with what to run instead.
+
+Behaviour changes:
+
+- `links/broken-external-links` and `links/broken-links` report **Not checked** instead of a pass when they did not run. A Not checked result is left out of the score, and the JSON report gains a `notChecked` list when there is one. A Quick audit's Links score can drop a few points where the empty passes used to pad it.
+- squirrel now decodes compressed pages and the other responses listed below itself (sitemaps already had their own reader). A response sent as `x-gzip` or an upper-case `GZIP` is now decoded, where it used to be read as raw bytes. A gzip body made of several members is read to the end of its first member, as browsers read it, where the previous release read every member. A page body that does not decode is still recorded as a decode failure, and the message now gives the decoder's reason.
+
 ### Fixed
 
-- A compressed response that inflates to gigabytes no longer exhausts memory. The runtime inflated every `Content-Encoding` body in full as soon as it arrived, whether squirrel read it under its size limit, cancelled it unread or discarded it with a redirect, so in our test an audit of a four-page site whose page, redirect, robots.txt and llms.txt were each a 1 GiB bomb (sent as 1 MB of gzip or less) peaked at 2.3 to 2.8 GB of memory. Every request the crawl and the audit send to the site now turns the runtime's decoding off, and squirrel decodes the body itself, no further than that read's limit: pages and redirects, robots.txt, llms.txt, the well-known and agent files, RSL licences, the reachability check, scripts, assets, external links and the soft-404 and cloaking re-checks. The same audit now peaks at 365 MB, against 221 MB for the site without the bombs, and reports the same findings: the bomb page is cut at 10 MB as before, the size an uncompressed page over the limit is cut at. Figures are in `benchmarks/2026-10-content-encoding-bombs.md`. `gzip`, `br`, `deflate` and `zstd` responses are decoded as before with the same `Accept-Encoding`, an `x-gzip` or upper-case `GZIP` coding is now decoded too, bytes a server appends after a complete compressed body are still ignored (a gzip body is read to the end of its first member, as browsers read it), and a body that does not decode is still recorded as a decode failure, now with the decoder's reason. The CLI's script check now stops reading one byte past its size limit instead of downloading the whole script first, and an external link's 403 page is read up to 1 MB for bot-wall detection. See [Compressed responses](https://docs.squirrelscan.com/configuration/crawler#compressed-responses). squirrelscan/repo#2717
-- A Quick audit no longer says your links are fine when it never checked them. Quick, `--offline` and `[external_links] enabled = false` do not request external links, and Quick does not follow internal links, yet `links/broken-external-links` passed with "No external links found to check" and `links/broken-links` passed with "No broken internal links detected". Both now report **Not checked** with the reason and what to run instead, in the console, text, Markdown and HTML reports, as `<not-checked>` in the LLM and XML reports and as `notChecked` in the JSON report. Not-checked results are not scored, so a Quick audit's Links score can drop a few points where the empty passes used to pad it. A broken target a Quick crawl does fetch, such as a 404 listed in the sitemap, is still reported, and the editor's summary request now names the checks that did not run. See [Which audits can find a broken link](https://docs.squirrelscan.com/rules/links/broken-links#which-audits-can-find-a-broken-link). squirrelscan/repo#2729
+- A compressed page, root file or checked resource that inflates to gigabytes no longer exhausts memory. The runtime could inflate a `Content-Encoding` body in full before squirrel read it, even when squirrel read it under its size limit, cancelled it unread or discarded it with a redirect. In our test, an audit of a four-page site whose page, redirect, robots.txt and llms.txt were each a 1 GiB bomb (sent as about 1 MB of compressed data) peaked at 1.8 to 2.8 GB of memory on the previous releases.
+  - These requests now turn the runtime's decoding off, and squirrel decodes the body as it reads it, stopping at that read's limit: pages and redirects, robots.txt, llms.txt, the well-known and agent files, RSL licences, Markdown versions of pages, the reachability check, scripts, external links, and the soft-404 and cloaking re-checks. An asset's size is counted as its body streams by, without holding it. Sitemaps already turned the runtime's decoding off and capped what they read.
+  - The same audit, run with this release's build, now peaks at about 275 MB, against about 150 MB for the same site without the bombs, and reports the same findings. The bomb page is cut at 10 MB, as before, which is where an uncompressed page over the limit is cut too.
+  - These requests send the same `Accept-Encoding` as before, squirrel's decoder handles `gzip`, `deflate`, `br` and `zstd`, and bytes a server appends after a complete compressed body are still ignored. The decoding changes are listed under Behaviour changes above.
+  - The CLI's script check now stops reading one byte past its size limit instead of downloading the whole script first, and an external link's 403 page is read up to 1 MB for bot-wall detection.
+  - Per-request figures are in `benchmarks/2026-10-content-encoding-bombs.md`. See [Compressed responses](https://docs.squirrelscan.com/configuration/crawler#compressed-responses).
+- A Quick audit no longer says your links are fine when it never checked them. Quick, `--offline` and `[external_links] enabled = false` do not request external links. Quick also does not follow internal links, unless the sitemaps give it nothing to crawl. Yet `links/broken-external-links` passed with "No external links found to check", and `links/broken-links` passed with "No broken internal links detected" when it had seen only the pages the crawl fetched.
+  - `links/broken-external-links` now reports **Not checked** when external links were not checked. `links/broken-links` reports Not checked when the audit did not follow links and left internal link targets unfetched. Each comes with the reason and what to run instead.
+  - The result appears in the console, text, Markdown and HTML reports, as `<not-checked>` in the LLM and XML reports, and as `notChecked` in the JSON report.
+  - Not checked results are not scored. A broken target a Quick crawl does fetch, such as a 404 listed in the sitemap, is still reported. A Quick audit that fetched every internal link target and found none broken still passes `links/broken-links`.
+  - See [Which audits can find a broken link](https://docs.squirrelscan.com/rules/links/broken-links#which-audits-can-find-a-broken-link).
 
 ## v0.0.109 (2026-10-12)
 
