@@ -7,6 +7,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   EXTERNAL_LINKS_NOT_CHECKED_SKIP_REASON,
+  EXTERNAL_LINKS_OVER_CAP_SKIP_REASON,
   LINK_TARGETS_NOT_FETCHED_SKIP_REASON,
 } from "@squirrelscan/core-contracts";
 
@@ -91,8 +92,8 @@ function quickReport(): AuditReport {
   };
 }
 
-const EXTERNAL_LINE = `Not checked: Broken External Links. ${EXTERNAL_MESSAGE}. Turn external link checks on to check them: in the CLI they run at the Surface and Full levels without --offline, and in the cloud they are a website setting.`;
-const INTERNAL_LINE = `Not checked: Broken Links. ${INTERNAL_MESSAGE}. Run a Surface or Full audit, which follows links, to check them.`;
+const EXTERNAL_LINE = `Not checked: Broken External Links. ${EXTERNAL_MESSAGE}. Turn external link checks on to check them: in the CLI pass --external-links, or run a Surface or Full audit, without --offline; in the cloud they are a website setting.`;
+const INTERNAL_LINE = `Not checked: Broken Links. ${INTERNAL_MESSAGE}. Turn internal link checks back on (they are off with --no-internal-links or internal_links.enabled = false), raise internal_links.max_targets, or run a Surface or Full audit, which follows links, to check them.`;
 
 describe("notCheckedRules / notCheckedLines", () => {
   test("one entry per rule, by name, with the reason and a hint; info rules left out", () => {
@@ -101,6 +102,26 @@ describe("notCheckedRules / notCheckedLines", () => {
       ["links/broken-links", LINK_TARGETS_NOT_FETCHED_SKIP_REASON],
     ]);
     expect(notCheckedLines(quickReport())).toEqual([EXTERNAL_LINE, INTERNAL_LINE]);
+  });
+
+  test("external links over the audit's limit are not checked, with the limit's hint", () => {
+    const report = quickReport();
+    const message =
+      "40 of 240 external link(s) were not checked: over this audit's limit of 200, which checks the most-linked first";
+    report.ruleResults = {
+      "links/broken-external-links": rule("links/broken-external-links", "Broken External Links", "warning", [
+        { name: "broken-external-links", status: "pass", message: "All 200 external link(s) are working" },
+        {
+          name: "broken-external-links",
+          status: "skipped",
+          message,
+          skipReason: EXTERNAL_LINKS_OVER_CAP_SKIP_REASON,
+        },
+      ]),
+    };
+    expect(notCheckedLines(report)).toEqual([
+      `Not checked: Broken External Links. ${message}. Raise the limit with external_links.max_links, or audit more pages, to check them.`,
+    ]);
   });
 
   test("other skip reasons are not 'not checked'", () => {
@@ -129,8 +150,10 @@ describe("every format shows it, never as an issue", () => {
 
   test("markdown, escaped like any message a published report carries", () => {
     const out = renderMarkdown(quickReport());
-    // The lines' only markdown punctuation is the "(s)" plural.
-    const escaped = (line: string) => line.replaceAll("(", "\\(").replaceAll(")", "\\)");
+    // The lines' only markdown punctuation: the "(s)" plural and the
+    // underscore in a config key.
+    const escaped = (line: string) =>
+      line.replaceAll("(", "\\(").replaceAll(")", "\\)").replaceAll("_", "\\_");
     expect(count(out, `**${escaped(EXTERNAL_LINE)}**`)).toBe(1);
     expect(count(out, `**${escaped(INTERNAL_LINE)}**`)).toBe(1);
     expect(out).toContain("link\\(s\\)");
