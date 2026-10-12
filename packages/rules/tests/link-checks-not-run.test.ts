@@ -269,8 +269,29 @@ describe("links/broken-links when the crawl did not follow links", () => {
     );
     expect(named(checks, "broken-links").map((c) => c.status)).toEqual(["skipped"]);
     expect(checks[0]!.message).toBe(
-      "1 of 4 internal link target(s) were not fetched because this audit did not follow links and status-checked only the 1 most-linked, so they were not checked for broken links",
+      "1 of 4 internal link target(s) were not fetched because this audit did not follow links and status-checked only the 1 most-linked targets, so they were not checked for broken links",
     );
+  });
+
+  test("a probe refused with 401/403 is unverifiable, not broken (a bot wall)", () => {
+    const { checks } = brokenLinksRule.run(
+      ctx(pages, {
+        linkTargetStatuses: [
+          { url: `${BASE}/gone`, status: 403, error: null },
+          { url: `${BASE}/blog/old`, status: 401, error: null },
+        ],
+        internalLinkProbe: { unfetched: 2, probed: 2, cap: 200 },
+      }),
+    );
+    expect(named(checks, "broken-links").map((c) => c.status)).toEqual(["pass"]);
+    expect(named(checks, "refused-links").map((c) => c.status)).toEqual(["info"]);
+  });
+
+  test("a probe that got no answer says so rather than naming zero targets", () => {
+    const { checks } = brokenLinksRule.run(
+      ctx(pages, { linkDiscoveryOff: true, internalLinkProbe: { unfetched: 2, probed: 0, cap: 200 } }),
+    );
+    expect(checks[0]!.message).toContain("its internal link checks got no answer");
   });
 
   test("a probe that was throttled is rate-limited, not broken", () => {

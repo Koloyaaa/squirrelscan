@@ -435,7 +435,7 @@ export interface SiteData {
    */
   linkTargetStatuses?: SitemapUrlStatusData[];
   /** What the internal link probe covered. Undefined when it did not run. */
-  internalLinkProbe?: { unfetched: number; probed: number; cap: number };
+  internalLinkProbe?: { unfetched: number; probed: number; cap: number; outOfScope?: number };
   resourceSizes?: {
     css: ResourceSizeData[];
     images: ResourceSizeData[];

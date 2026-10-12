@@ -14,7 +14,7 @@ enabled = true
 cache_ttl_days = 7
 timeout_ms = 10000
 concurrency = 5
-# max_links = 500   # unset: the page budget, at least 10
+# max_links = 500   # unset: the page budget or 200, whichever is more
 ```
 
 Internal links have a section of their own, [`[internal_links]`](#internal-links).
@@ -64,9 +64,9 @@ enabled = false
 ### `max_links`
 
 **Type:** `number`
-**Default:** unset: the audit's page budget, and never fewer than 10
+**Default:** unset: the audit's page budget or 200, whichever is more
 
-The most distinct external links one audit checks. The links on the most pages go first (the nav and footer links every page shares), then the rest by URL, so the same crawl always checks the same set. Links over the limit are reported as **Not checked** with reason `external-links-over-cap`. In a cloud audit each checked link costs 1 credit, so this is also the most an audit spends on them.
+The most distinct external links one audit requests. The links on the most pages go first (the nav and footer links every page shares), then the rest by URL, so the same crawl always checks the same set. Links over the limit are reported as **Not checked** with reason `external-links-over-cap`. It bounds requests, not credits: a cloud audit is charged for at most one external link per page of its budget either way.
 
 ```toml
 [external_links]

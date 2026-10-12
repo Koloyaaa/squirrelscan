@@ -70,6 +70,14 @@ export const brokenLinksRule: Rule = {
       sources: string[];
       statusCode: number;
     }[] = [];
+    // repo#2729: a probed 401/403 is a bot wall or an auth wall refusing a
+    // status-only request, not a missing page. The crawl keeps challenge pages
+    // out of this rule; the probe's refusals are kept out the same way.
+    const refusedLinks: {
+      url: string;
+      sources: string[];
+      statusCode: number;
+    }[] = [];
 
     // Distinct targets neither the crawl nor the probe fetched: status unknown.
     const unfetchedTargets = new Set<string>();
@@ -90,9 +98,13 @@ export const brokenLinksRule: Rule = {
           continue;
         }
         if (typeof probe?.status === "number" && probe.status > 0) {
+          probedTargets.add(normalizedTarget);
+          if (probe.status === 401 || probe.status === 403) {
+            refusedLinks.push({ url: target, sources, statusCode: probe.status });
+            continue;
+          }
           statusCode = probe.status;
           probed = true;
-          probedTargets.add(normalizedTarget);
         }
       }
       if (statusCode === undefined) {
@@ -156,9 +168,13 @@ export const brokenLinksRule: Rule = {
 
     if (notFollowed) {
       const probe = ctx.site?.internalLinkProbe;
-      const why = probe
-        ? `this audit did not follow links and status-checked only the ${probe.probed} most-linked`
-        : "this audit did not follow links and internal link checks were off";
+      const why = !probe
+        ? "this audit did not follow links and internal link checks were off"
+        : probe.probed > 0
+          ? `this audit did not follow links and status-checked only the ${probe.probed} most-linked targets`
+          : (probe.outOfScope ?? 0) > 0
+            ? "this audit did not follow links and the targets are outside the crawl scope or disallowed by robots.txt"
+            : "this audit did not follow links and its internal link checks got no answer";
       checks.push({
         name: "broken-links",
         status: "skipped",
@@ -170,6 +186,20 @@ export const brokenLinksRule: Rule = {
           unfetchedTargets: unfetchedTargets.size,
           probedTargets: probedTargets.size,
         },
+      });
+    }
+
+    if (refusedLinks.length > 0) {
+      checks.push({
+        name: "refused-links",
+        status: "info",
+        message: `${refusedLinks.length} internal link(s) refused the link check (401/403) - status unverifiable`,
+        items: refusedLinks.map((b) => ({
+          id: b.url,
+          label: `${b.url} (${b.statusCode})`,
+          sourcePages: b.sources,
+          meta: { statusCode: b.statusCode, probed: true },
+        })),
       });
     }
 

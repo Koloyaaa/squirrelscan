@@ -42,7 +42,7 @@ const HINTS: Record<string, string> = {
   [EXTERNAL_LINKS_NOT_CHECKED_SKIP_REASON]:
     "Turn external link checks back on to check them: they are on by default, and off with --offline, --no-external-links, external_links.enabled = false, or the website setting in the cloud.",
   [LINK_TARGETS_NOT_FETCHED_SKIP_REASON]:
-    "Run a Surface or Full audit, which follows links, to check them.",
+    "Turn internal link checks back on (they are off with --no-internal-links or internal_links.enabled = false), raise internal_links.max_targets, or run a Surface or Full audit, which follows links, to check them.",
   [EXTERNAL_LINKS_OVER_CAP_SKIP_REASON]:
     "Raise the limit with external_links.max_links, or audit more pages, to check them.",
 };

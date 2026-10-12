@@ -92,7 +92,7 @@ function quickReport(): AuditReport {
 }
 
 const EXTERNAL_LINE = `Not checked: Broken External Links. ${EXTERNAL_MESSAGE}. Turn external link checks back on to check them: they are on by default, and off with --offline, --no-external-links, external_links.enabled = false, or the website setting in the cloud.`;
-const INTERNAL_LINE = `Not checked: Broken Links. ${INTERNAL_MESSAGE}. Run a Surface or Full audit, which follows links, to check them.`;
+const INTERNAL_LINE = `Not checked: Broken Links. ${INTERNAL_MESSAGE}. Turn internal link checks back on (they are off with --no-internal-links or internal_links.enabled = false), raise internal_links.max_targets, or run a Surface or Full audit, which follows links, to check them.`;
 
 describe("notCheckedRules / notCheckedLines", () => {
   test("one entry per rule, by name, with the reason and a hint; info rules left out", () => {

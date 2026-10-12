@@ -709,25 +709,26 @@ export const COVERAGE_PAGE_LIMITS = {
 
 /**
  * Link checking bounds (repo#2729). Link checks are on by default at every
- * level, so each one needs a ceiling an audit can never exceed.
+ * level, so each needs a ceiling an audit can never exceed.
  *
- * - `externalPerAuditMin`: an audit checks at most `max(pages, this)` distinct
- *   external links, most-linked first; the rest are reported as not checked. In
- *   the cloud each one costs a credit, so the ceiling equals the per-page credit
- *   the quote already reserves, which makes that reservation a true upper bound.
- *   A floor so a small audit still covers the nav and footer links every page
- *   shares. Two real sites linked out to 37,740 and 42,228 distinct URLs in one
- *   audit, which is why there is a ceiling at all.
+ * - `externalPerAuditMin`: an audit requests at most `max(pages, this)` distinct
+ *   external links, most-linked first (and any the caller asks to check first);
+ *   the rest are reported as not checked. Two real sites linked out to 37,740
+ *   and 42,228 distinct URLs in one audit, which is why there is a ceiling at
+ *   all; 200 covers the 90th percentile of audits that checked them (about 110).
+ *   This bounds REQUESTS. What a cloud audit is charged is bounded separately
+ *   and lower: 1 credit per link up to one per page of its budget
+ *   (`externalLinkBudget` in credits.ts), the rest checked free.
  * - `internalTargetProbes`: status-only requests (HEAD, then GET) for internal
  *   link targets the crawl did not fetch, most-linked first. Free: no render,
  *   no rules, no page charge.
  */
 export const LINK_CHECK_LIMITS = {
-  externalPerAuditMin: 10,
+  externalPerAuditMin: 200,
   internalTargetProbes: 200,
 } as const;
 
-/** Distinct external links one audit may check: its page budget, at least `externalPerAuditMin`. */
+/** Distinct external links one audit may request: its page budget, at least `externalPerAuditMin`. */
 export function externalLinkCheckCap(pages: number): number {
   const budget = Number.isFinite(pages) ? Math.trunc(pages) : 0;
   return Math.max(LINK_CHECK_LIMITS.externalPerAuditMin, budget);

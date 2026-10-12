@@ -79,6 +79,12 @@ export interface StreamPreRulesOptions {
     resolveBulkChecker?: () => Promise<
       ((urls: string[]) => Promise<Map<string, ExternalCheckResult>>) | undefined
     >;
+    /**
+     * Links to check ahead of the per-audit limit's most-linked order
+     * (repo#2729): the cloud passes the ones an open broken-link finding names,
+     * so a capped run still re-checks them and can tell they were fixed.
+     */
+    priorityHrefs?: readonly string[];
   };
   /**
    * Site URL to collect cloud-prefetch payloads for. Omit when the run has no
@@ -232,6 +238,7 @@ export function runStreamingPreRules(
           options.externalLinks.onProgress,
           options.externalLinks.linkCache ?? null,
           bulkChecker,
+          options.externalLinks.priorityHrefs,
         )
       : [];
 

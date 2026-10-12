@@ -79,6 +79,7 @@ async function audit(
     internalLinks?: boolean;
     maxLinks?: number;
     sitemap?: boolean;
+    exclude?: string[];
   },
 ) {
   const origin = serveSite({ sitemap: opts.sitemap ?? true });
@@ -104,7 +105,7 @@ async function audit(
   const config = {
     rule_options: {},
     rules: { enable: RULES },
-    crawler: { max_pages: 10 },
+    crawler: { max_pages: 10, exclude: opts.exclude ?? [] },
     external_links: {
       enabled: opts.externalLinks,
       concurrency: 1,
@@ -175,6 +176,17 @@ for (const engine of ["v1", "v2"] as const) {
       ]);
     });
 
+    test("the probe stays inside the crawl scope: an excluded target is not requested", async () => {
+      // [crawler] exclude keeps /missing out of the crawl, and out of the probe.
+      const { internal } = await audit(engine, {
+        followLinks: false,
+        externalLinks: false,
+        exclude: ["/missing"],
+      });
+      expect(statuses(internal)).toEqual(["skipped:link-targets-not-fetched"]);
+      expect(internal[0]!.message).toContain("outside the crawl scope or disallowed by robots.txt");
+    });
+
     test("over the per-audit external link limit: the most-linked are checked, the rest not checked", async () => {
       const { stats, external } = await audit(engine, {
         followLinks: true,
@@ -200,8 +212,8 @@ for (const engine of ["v1", "v2"] as const) {
       expect(internal[0]!.items?.map((i) => i.id)).toEqual([expect.stringContaining("/missing")]);
       expect(statuses(external)).toEqual(["pass:"]);
       expect(external[0]!.message).toBe("All 2 external link(s) are working");
-      // Unset max_links is the page budget, at least 10.
-      expect(stats?.externalLinkCheck).toEqual({ found: 2, checked: 2, cap: 10 });
+      // Unset max_links is the page budget, at least 200.
+      expect(stats?.externalLinkCheck).toEqual({ found: 2, checked: 2, cap: 200 });
     });
 
     test("no usable sitemap: the crawler follows links after all, so the 404 is found", async () => {

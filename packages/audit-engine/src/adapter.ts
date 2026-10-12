@@ -140,6 +140,8 @@ import { checkResourceSizes, type ResourceCheckResult } from "./resource-checker
 import { fetchScriptContents, type ScriptFetchResult } from "./script-fetcher";
 import { isRateLimitStatus } from "@squirrelscan/utils/rate-limit";
 import { getHostname, normalizeUrl } from "@squirrelscan/utils/url";
+import { isInScope } from "@squirrelscan/crawler/frontier";
+import { createRobotsEvaluator } from "@squirrelscan/crawler/robots";
 import { detectWafChallengePage } from "@squirrelscan/waf-detect";
 
 // ============================================
@@ -551,7 +553,7 @@ export interface PreFetchedAssets {
    */
   linkTargetStatuses?: SitemapUrlStatusData[];
   /** What the internal link probe covered: targets it could not reach, and how many it checked. */
-  internalLinkProbe?: { unfetched: number; probed: number; cap: number };
+  internalLinkProbe?: { unfetched: number; probed: number; cap: number; outOfScope?: number };
   /**
    * #1252: set only when the asset-fetch step degraded (total budget spent or a
    * host tarpitting) and some fetches were skipped. Undefined on a healthy run,
@@ -916,13 +918,49 @@ export function fetchAssetsFromOccurrences(
 
     // repo#2729: internal link targets the crawl never fetched, most-linked
     // first, so a linked 404 is found even when the crawl did not follow links.
+    // Held to what the crawl itself may request: inside the crawl scope
+    // (include/exclude, allowed domains) and, when robots.txt is respected,
+    // allowed by it. Excluded paths like /logout are often on every page, so
+    // without this they would be the first requested.
     const internalLinksEnabled = config.internal_links?.enabled !== false;
     const probeCap = config.internal_links?.max_targets ?? LINK_CHECK_LIMITS.internalTargetProbes;
-    const unfetchedTargets = internalLinksEnabled
-      ? Array.from(occurrences.internalLinkTargets.entries())
-          .filter(([key]) => !occurrences.crawledUrls.has(key))
-          .sort(([ak, a], [bk, b]) => b.pages - a.pages || (ak < bk ? -1 : ak > bk ? 1 : 0))
-      : [];
+    // The crawl's own user agent, so the request is UA-equivalent to the crawl
+    // (a bot wall that let the crawl through lets this through too).
+    const probeUserAgent = crawl?.config?.userAgent || config.crawler?.user_agent || CHROME_USER_AGENT;
+    const respectRobots = config.crawler?.respect_robots ?? true;
+    const robotsRecord =
+      internalLinksEnabled && respectRobots
+        ? yield* storage.getRobotsTxt(crawlId).pipe(Effect.catchAll(() => Effect.succeed(null)))
+        : null;
+    const robots =
+      robotsRecord?.exists && robotsRecord.content
+        ? createRobotsEvaluator(robotsRecord.url, robotsRecord.content, probeUserAgent)
+        : null;
+    const mayProbe = (url: string): boolean => {
+      try {
+        const scoped = isInScope(url, {
+          baseUrl,
+          include: config.crawler?.include ?? [],
+          exclude: config.crawler?.exclude ?? [],
+          allowedDomains: config.project?.domains ?? [],
+        });
+        return scoped.allowed && (robots === null || robots.isAllowed(url));
+      } catch {
+        return false;
+      }
+    };
+    let outOfScope = 0;
+    const unfetchedTargets =
+      internalLinksEnabled && baseUrl
+        ? Array.from(occurrences.internalLinkTargets.entries())
+            .filter(([key, target]) => {
+              if (occurrences.crawledUrls.has(key)) return false;
+              if (mayProbe(target.url)) return true;
+              outOfScope++;
+              return false;
+            })
+            .sort(([ak, a], [bk, b]) => b.pages - a.pages || (ak < bk ? -1 : ak > bk ? 1 : 0))
+        : [];
     const probeTargets = unfetchedTargets.slice(0, probeCap).map(([, target]) => target.url);
 
     const resourceCheckStart = Date.now();
@@ -971,8 +1009,14 @@ export function fetchAssetsFromOccurrences(
           orphanCandidates.slice(0, sitemapStatusLimit),
           resourceCheckOptions,
         ),
-        // Status only: the same cheap HEAD (then GET) path as the sitemap pool.
-        linkTargets: checkResourceSizes(probeTargets, resourceCheckOptions),
+        // Status only: the same cheap HEAD (then GET) path as the sitemap pool,
+        // with the crawl's UA and its own limit (the cloud's per-pool item cap
+        // would otherwise cut it below max_targets).
+        linkTargets: checkResourceSizes(probeTargets, {
+          ...resourceCheckOptions,
+          userAgent: probeUserAgent,
+          maxResources: probeTargets.length,
+        }),
       },
       { concurrency: 5 },
     );
@@ -1118,8 +1162,11 @@ export function fetchAssetsFromOccurrences(
             })),
             internalLinkProbe: {
               unfetched: unfetchedTargets.length,
-              probed: resourceResults.linkTargets.length,
+              // Answered, not merely attempted: a fetch the budget skipped or
+              // that failed outright says nothing about the target.
+              probed: resourceResults.linkTargets.filter((r) => typeof r.status === "number" && r.status > 0).length,
               cap: probeCap,
+              outOfScope,
             },
           }
         : {}),
@@ -2979,21 +3026,26 @@ export function absorbExternalLinkOccurrences(
 
 /**
  * The external links an audit checks under a `max_links` limit (repo#2729):
- * all of them when there is no limit or they fit, else the ones on the most
- * pages first, ties broken by URL so the same crawl always checks the same set.
+ * all of them when there is no limit or they fit. Otherwise `priority` first
+ * (links the caller must see again, such as the ones an open finding names, so
+ * a capped run can still tell it fixed), then the ones on the most pages, ties
+ * broken by URL so the same crawl always checks the same set.
  */
 export function selectExternalLinksToCheck(
   occurrences: ExternalLinkOccurrences,
   maxLinks: number | undefined,
+  priority: readonly string[] = [],
 ): string[] {
   const hrefs = Array.from(occurrences.keys());
   if (maxLinks === undefined || hrefs.length <= maxLinks) return hrefs;
+  const first = new Set(priority.filter((href) => occurrences.has(href)));
   const pagesOf = (href: string): number =>
     new Set((occurrences.get(href) ?? []).map((o) => o.pageUrl)).size;
   const ranked = hrefs
+    .filter((href) => !first.has(href))
     .map((href) => ({ href, pages: pagesOf(href) }))
     .sort((a, b) => b.pages - a.pages || (a.href < b.href ? -1 : a.href > b.href ? 1 : 0));
-  return ranked.slice(0, Math.max(0, maxLinks)).map((r) => r.href);
+  return [...first, ...ranked.map((r) => r.href)].slice(0, Math.max(0, maxLinks));
 }
 
 export function checkExternalLinksOnStorage(
@@ -3033,6 +3085,7 @@ export function checkCollectedExternalLinks(
   onProgress?: (progress: ExternalLinkCheckProgress) => void,
   linkCache?: LinkCache | null,
   bulkChecker?: (urls: string[]) => Promise<Map<string, ExternalCheckResult>>,
+  priorityHrefs?: readonly string[],
 ): Effect.Effect<ExternalCheckResult[], never, never> {
   return Effect.gen(function* () {
     if (!config.enabled) {
@@ -3051,7 +3104,11 @@ export function checkCollectedExternalLinks(
     // credit, so an audit checks at most `max_links` of them: the most-linked
     // first (nav and footer links every page shares), then by URL so the choice
     // is stable. The rest are counted and reported as not checked.
-    const hrefs = selectExternalLinksToCheck(externalLinkOccurrences, config.max_links);
+    const hrefs = selectExternalLinksToCheck(
+      externalLinkOccurrences,
+      config.max_links,
+      priorityHrefs,
+    );
     yield* storage
       .updateStats(crawlId, {
         externalLinkCheck: {
@@ -3114,7 +3171,7 @@ export function checkCollectedExternalLinks(
     const fromCache = results.filter((r) => r.fromCache).length;
     onProgress?.({
       checked: results.length,
-      total: externalLinkOccurrences.size,
+      total: hrefs.length,
       fromCache,
     });
 
