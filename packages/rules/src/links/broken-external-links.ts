@@ -1,9 +1,10 @@
 // links/broken-external-links - Broken external link detection
 // Uses cached check results from external link checker
 
+import { EXTERNAL_LINKS_NOT_CHECKED_SKIP_REASON } from "@squirrelscan/core-contracts";
 import { isRateLimitStatus } from "@squirrelscan/utils/rate-limit";
 
-import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
+import type { Rule, RuleContext, RuleResult, CheckResult, SiteData } from "../types";
 
 /**
  * A link the origin refused to answer because it was throttling us (#1829).
@@ -15,6 +16,33 @@ import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
  */
 function isRateLimitedLink(link: { status: number | null; rateLimited?: boolean }): boolean {
   return link.rateLimited === true || isRateLimitStatus(link.status);
+}
+
+/**
+ * Distinct external http(s) hrefs on the audited pages, checked or not. Skips
+ * the parser's unparseable-href entries, as the link checker never sees them.
+ */
+function countExternalLinks(pages: SiteData["pages"] | undefined): number {
+  const hrefs = new Set<string>();
+  for (const page of pages ?? []) {
+    for (const link of page.parsed?.links ?? []) {
+      if (!link.isInternal && link.url && !link.error && /^https?:/i.test(link.url)) {
+        hrefs.add(link.url);
+      }
+    }
+  }
+  return hrefs.size;
+}
+
+function notChecked(message: string, found: number): CheckResult {
+  return {
+    name: "broken-external-links",
+    status: "skipped",
+    message,
+    skipReason: EXTERNAL_LINKS_NOT_CHECKED_SKIP_REASON,
+    value: found,
+    details: { externalLinksFound: found },
+  };
 }
 
 export const brokenExternalLinksRule: Rule = {
@@ -34,7 +62,36 @@ export const brokenExternalLinksRule: Rule = {
     const checks: CheckResult[] = [];
     const externalLinks = ctx.site?.externalLinks;
 
-    if (!externalLinks || externalLinks.length === 0) {
+    // repo#2729: undefined means external link checking did not run (Quick,
+    // --offline, external_links off). That is not "no external links": the
+    // pass it used to be read as healthy and resolved open issues.
+    if (externalLinks === undefined) {
+      const found = countExternalLinks(ctx.site?.pages);
+      checks.push(
+        notChecked(
+          found > 0
+            ? `External link checking was off for this audit, so ${found} external link(s) on the audited pages were not checked`
+            : "External link checking was off for this audit, so external links were not checked",
+          found,
+        ),
+      );
+      return { checks };
+    }
+
+    if (externalLinks.length === 0) {
+      // No check results while the pages do link out: the checker never saw
+      // them (rules re-run on a stored crawl by `squirrel analyze`, a check
+      // phase that died early). Not a pass.
+      const found = countExternalLinks(ctx.site?.pages);
+      if (found > 0) {
+        checks.push(
+          notChecked(
+            `No external link check results for the ${found} external link(s) on the audited pages, so they were not checked`,
+            found,
+          ),
+        );
+        return { checks };
+      }
       checks.push({
         name: "broken-external-links",
         status: "pass",
@@ -69,7 +126,16 @@ export const brokenExternalLinksRule: Rule = {
       (l) => l.status !== null || l.error !== null
     ).length;
 
-    if (brokenLinks.length === 0) {
+    if (brokenLinks.length === 0 && checkedCount === 0) {
+      // Every link is still unresolved: "All 0 external link(s) are working"
+      // would be a pass on nothing.
+      checks.push(
+        notChecked(
+          `None of the ${externalLinks.length} external link(s) could be checked this audit`,
+          externalLinks.length,
+        ),
+      );
+    } else if (brokenLinks.length === 0) {
       checks.push({
         name: "broken-external-links",
         status: "pass",

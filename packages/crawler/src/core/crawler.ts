@@ -2885,6 +2885,12 @@ export function createCrawler(
           "sitemaps discovered and stored",
           `${sitemapResult.discovered.length} discovered, ${sitemapResult.all.length} total, ${config.sitemapPendingCount}/${config.sitemapUrlCount} enqueued (rest filtered)`,
         );
+        // repo#2729: the gate above is now settled for this crawl. Record that
+        // links will not be followed, so links/broken-links can say it did not
+        // fetch the targets instead of passing on targets it never saw.
+        if (!linkDiscoveryAllowed()) {
+          yield* storage.updateStats(crawlId, { linkDiscoveryOff: true });
+        }
 
         // Seed the crawl queue — the resolved URL when its redirect was adopted,
         // the user's own URL when it was refused as off-site.
@@ -3009,6 +3015,11 @@ export function createCrawler(
             "restored sitemap-discovery gate",
             `${gate.sitemapPendingCount}/${gate.sitemapUrlCount} sitemap URL(s) pending`,
           );
+          // repo#2729: a crawl interrupted before start() recorded it, or begun
+          // on an older release, still says it did not follow links.
+          if (!linkDiscoveryAllowed()) {
+            yield* storage.updateStats(crawlId, { linkDiscoveryOff: true });
+          }
         }
 
         // Rebuild breadth-first state from existing frontier entries
