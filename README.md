@@ -25,6 +25,7 @@ Combine your coding agent with a deterministic and extensible audit tool.
 
 ## Features
 
+- **Internal and external link checking and monitoring** - Find broken, dead and redirecting links inside your site and out to others. On by default at every level, switch it off any time, and keep watching them with scheduled cloud audits
 - **300+ Rules, 21 Categories** - Comprehensive coverage across SEO, accessibility, performance, and security
 - **Fast crawler** - Highly optimized memory efficient crawler
 - **Agent Experience** - Audit agent experience to assist agents in using your site

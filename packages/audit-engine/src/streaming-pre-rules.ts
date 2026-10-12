@@ -28,6 +28,7 @@ import { Effect } from "effect";
 
 import type { ExternalLinksConfig, Config } from "@squirrelscan/config";
 import type { PageRecord } from "@squirrelscan/core-contracts";
+import { externalLinkCheckCap } from "@squirrelscan/core-contracts/limits";
 import type { SQLiteStorage } from "@squirrelscan/crawler";
 
 import {
@@ -220,7 +221,14 @@ export function runStreamingPreRules(
           storage,
           crawlId,
           externalLinkOccurrences,
-          options.externalLinks.config,
+          // repo#2729: an explicit `max_links` wins; unset is the audit's page
+          // budget, so the cloud's one-credit-per-page reservation is an upper bound.
+          {
+            ...options.externalLinks.config,
+            max_links:
+              options.externalLinks.config.max_links ??
+              externalLinkCheckCap(config.crawler?.max_pages ?? 0),
+          },
           options.externalLinks.onProgress,
           options.externalLinks.linkCache ?? null,
           bulkChecker,

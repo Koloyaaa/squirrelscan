@@ -1038,6 +1038,18 @@ export const audit = defineCommand({
       description:
         "Run fully offline: skip cloud features, publishing, and telemetry",
     },
+    // repo#2729: link checks are on by default and switched off, not on.
+    // Declared for help and completions; read from rawArgs like --no-publish.
+    "no-external-links": {
+      type: "boolean",
+      description:
+        "Do not check links to other sites this run (same as [external_links] enabled = false)",
+    },
+    "no-internal-links": {
+      type: "boolean",
+      description:
+        "Do not status-check internal link targets the crawl did not fetch (same as [internal_links] enabled = false)",
+    },
     visibility: {
       type: "string",
       description:
@@ -1572,16 +1584,20 @@ export const audit = defineCommand({
       // The audit level with every setting the user chose laid over it; a
       // chosen value that differs from the level's makes the run custom.
       // `[external_links] enabled` is a choice only when it is false: true is
-      // the schema default `squirrel init` writes into every config, and it
-      // would otherwise switch the quick level's link checks on for everyone.
+      // the schema default `squirrel init` writes into every config. Link
+      // checks are on at every level (repo#2729), so the choices here are the
+      // off switches: that config value and --no-external-links.
+      const noExternalLinks = hasNegatedFlag(rawArgs, "external-links");
       const auditLevel = resolveLocalAuditLevel(level, {
         pages: maxPages,
         ...(requestedRenderMode !== undefined
           ? { render: requestedRenderMode }
           : {}),
-        ...(configOverrides.externalLinks !== undefined
-          ? { externalLinks: configOverrides.externalLinks }
-          : {}),
+        ...(noExternalLinks
+          ? { externalLinks: false }
+          : configOverrides.externalLinks !== undefined
+            ? { externalLinks: configOverrides.externalLinks }
+            : {}),
         probe: probing.level,
       });
       // The crawler's word for the strategy: quick, surface or full.
@@ -2175,6 +2191,10 @@ export const audit = defineCommand({
           // The level's external link checks unless [external_links] enabled
           // in the config file says otherwise (--offline still turns them off).
           externalLinksEnabled: auditLevel.settings.externalLinks,
+          // repo#2729: the internal link probe, on unless switched off.
+          ...(hasNegatedFlag(rawArgs, "internal-links")
+            ? { internalLinksEnabled: false }
+            : {}),
           // Retention (#1912) deleted some of this project's audit history, so
           // say so. stderr unconditionally: this is the one line that tells a
           // user their older reports are gone, and putting it on stdout would

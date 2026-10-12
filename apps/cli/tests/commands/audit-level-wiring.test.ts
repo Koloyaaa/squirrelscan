@@ -190,7 +190,9 @@ describe("squirrel audit --level", () => {
     const options = runs[0]!;
     expect(options.coverageMode).toBe("quick");
     expect(options.maxPages).toBe(25);
-    expect(options.externalLinksEnabled).toBe(false);
+    // repo#2729: link checks are on at every level, quick included.
+    expect(options.externalLinksEnabled).toBe(true);
+    expect(options.internalLinksEnabled).toBeUndefined();
     expect(options.renderStrategy).toBe("auto");
     expect(options.probe?.level).toBe("passive");
     expect(options.auditLevel?.settings.cloudChecks).toBe(false);
@@ -256,7 +258,21 @@ describe("squirrel audit --level", () => {
       "[crawler]\nmax_pages = 100\n\n[external_links]\nenabled = true\n"
     );
     expect(line("Level")).toBe("quick · max 25 pages");
+    expect(runs[0]?.externalLinksEnabled).toBe(true);
+  });
+
+  test("--no-external-links and --no-internal-links switch link checks off (repo#2729)", async () => {
+    await runAudit([
+      "--level",
+      "quick",
+      "--no-external-links",
+      "--no-internal-links",
+    ]);
+    expect(line("Level")).toBe(
+      "custom (quick + external_links off) · max 25 pages"
+    );
     expect(runs[0]?.externalLinksEnabled).toBe(false);
+    expect(runs[0]?.internalLinksEnabled).toBe(false);
   });
 
   test("[crawler] coverage picks the level, and fast is quick there too", async () => {

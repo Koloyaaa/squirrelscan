@@ -52,10 +52,18 @@ export const brokenLinksRule: Rule = {
       crawledPages.set(normalizeUrl(page.url), page.statusCode);
     }
 
+    // repo#2729: statuses the link probe fetched for targets the crawl did not
+    // (status-only HEAD/GET). A known status, the same as a crawled page's.
+    const probedStatuses = new Map<string, { status: number | null; rateLimited?: boolean }>();
+    for (const probe of ctx.site?.linkTargetStatuses ?? []) {
+      probedStatuses.set(normalizeUrl(probe.url), probe);
+    }
+
     const brokenLinks: {
       url: string;
       sources: string[];
       statusCode: number;
+      probed: boolean;
     }[] = [];
     const rateLimitedLinks: {
       url: string;
@@ -63,15 +71,30 @@ export const brokenLinksRule: Rule = {
       statusCode: number;
     }[] = [];
 
-    // Distinct targets the crawl never fetched: their status is unknown.
+    // Distinct targets neither the crawl nor the probe fetched: status unknown.
     const unfetchedTargets = new Set<string>();
     const allTargets = new Set<string>();
+    const probedTargets = new Set<string>();
 
     for (const [target, sources] of linkTargets) {
       // Normalize target URL to match crawler's normalization
       const normalizedTarget = normalizeUrl(target);
       allTargets.add(normalizedTarget);
-      const statusCode = crawledPages.get(normalizedTarget);
+      let statusCode = crawledPages.get(normalizedTarget);
+      let probed = false;
+      if (statusCode === undefined) {
+        const probe = probedStatuses.get(normalizedTarget);
+        if (probe?.rateLimited) {
+          probedTargets.add(normalizedTarget);
+          rateLimitedLinks.push({ url: target, sources, statusCode: probe.status ?? 429 });
+          continue;
+        }
+        if (typeof probe?.status === "number" && probe.status > 0) {
+          statusCode = probe.status;
+          probed = true;
+          probedTargets.add(normalizedTarget);
+        }
+      }
       if (statusCode === undefined) {
         unfetchedTargets.add(normalizedTarget);
         continue;
@@ -89,7 +112,7 @@ export const brokenLinksRule: Rule = {
 
       // Only broken if we crawled it AND got error status (4xx/5xx)
       if (statusCode >= 400) {
-        brokenLinks.push({ url: target, sources, statusCode });
+        brokenLinks.push({ url: target, sources, statusCode, probed });
       }
     }
 
@@ -108,7 +131,11 @@ export const brokenLinksRule: Rule = {
           id: b.url,
           label: `${b.url} (${b.statusCode})`,
           sourcePages: b.sources,
-          meta: { statusCode: b.statusCode, linkedFrom: b.sources.length },
+          meta: {
+            statusCode: b.statusCode,
+            linkedFrom: b.sources.length,
+            ...(b.probed ? { probed: true } : {}),
+          },
         })),
       });
     } else if (!notFollowed) {
@@ -119,18 +146,30 @@ export const brokenLinksRule: Rule = {
         // What the pass covers (repo#2729). Its presence also tells a reader of
         // the result that this engine reports unfetched targets as skipped, so
         // a pass here was not vacuous.
-        details: { linkTargets: allTargets.size, unfetchedTargets: unfetchedTargets.size },
+        details: {
+          linkTargets: allTargets.size,
+          unfetchedTargets: unfetchedTargets.size,
+          probedTargets: probedTargets.size,
+        },
       });
     }
 
     if (notFollowed) {
+      const probe = ctx.site?.internalLinkProbe;
+      const why = probe
+        ? `this audit did not follow links and status-checked only the ${probe.probed} most-linked`
+        : "this audit did not follow links and internal link checks were off";
       checks.push({
         name: "broken-links",
         status: "skipped",
-        message: `${unfetchedTargets.size} of ${allTargets.size} internal link target(s) were not fetched because this audit did not follow links, so they were not checked for broken links`,
+        message: `${unfetchedTargets.size} of ${allTargets.size} internal link target(s) were not fetched because ${why}, so they were not checked for broken links`,
         skipReason: LINK_TARGETS_NOT_FETCHED_SKIP_REASON,
         value: unfetchedTargets.size,
-        details: { linkTargets: allTargets.size, unfetchedTargets: unfetchedTargets.size },
+        details: {
+          linkTargets: allTargets.size,
+          unfetchedTargets: unfetchedTargets.size,
+          probedTargets: probedTargets.size,
+        },
       });
     }
 

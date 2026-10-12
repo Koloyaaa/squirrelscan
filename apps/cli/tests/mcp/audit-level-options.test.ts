@@ -46,12 +46,12 @@ describe("levelRunOptions", () => {
     expect(options.cloudRendering).toBeUndefined();
   });
 
-  test("quick: passive, no external links", async () => {
+  test("quick: passive, external links checked like every level (repo#2729)", async () => {
     const options = await optionsFor("", "quick");
     expect(options).toMatchObject({
       coverageMode: "quick",
       maxPages: 25,
-      externalLinksEnabled: false,
+      externalLinksEnabled: true,
       probe: { level: "passive", budgetMs: 0 },
     });
   });

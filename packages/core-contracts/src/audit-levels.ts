@@ -46,7 +46,11 @@ export interface AuditSettings {
   /** Cloud-backed checks: AI and authority signals, the editor's summary, tech detection, domain stats. */
   cloudChecks: boolean;
   render: RenderPolicy;
-  /** Check links that leave the site. In the cloud each destination costs a credit. */
+  /**
+   * Check links that leave the site. On at every level (repo#2729). In the cloud
+   * each distinct destination costs a credit, at most `externalLinkCheckCap(pages)`
+   * per audit.
+   */
   externalLinks: boolean;
   probe: ProbeIntensity;
 }
@@ -69,7 +73,8 @@ export const AUDIT_LEVEL_PRESETS: Readonly<Record<AuditLevel, Readonly<AuditSett
     crawlStrategy: "seed-and-sitemap",
     cloudChecks: false,
     render: "auto",
-    externalLinks: false,
+    // repo#2729: link checking is on at every level and is switched off, not on.
+    externalLinks: true,
     probe: "passive",
   },
   surface: {
@@ -96,7 +101,7 @@ export const AUDIT_LEVEL_COPY: Readonly<
 > = {
   quick: {
     label: "Quick",
-    summary: `A fast look at the seed page and sitemaps: ${COVERAGE_PAGE_LIMITS.quick} pages, rendered in the cloud. Costs credits: 50 plus 2 per page, up to 100.`,
+    summary: `A fast look at the seed page and sitemaps: ${COVERAGE_PAGE_LIMITS.quick} pages, rendered in the cloud, with internal and external link checks. Costs credits: 50, plus 2 per page and 1 per external link checked, up to ${50 + 3 * COVERAGE_PAGE_LIMITS.quick}.`,
   },
   surface: {
     label: "Surface",
@@ -248,10 +253,12 @@ export function parseResolvedAuditSettings(value: unknown): ResolvedAuditSetting
 
 /**
  * The cloud's old four scan depths, kept so existing websites and API callers keep
- * working. Each is the full set of settings it resolved to before audit levels
- * existed (pages, engine coverage mode, cloud checks, rendering, external links),
- * so migrating a website to these values changes nothing it does or costs. They
- * are `custom` settings by construction, except where they happen to equal a level.
+ * working. Each is the set of settings it resolved to before audit levels existed
+ * (pages, engine coverage mode, cloud checks, rendering), so migrating a website
+ * to these values kept what it crawled. External link checks are the exception:
+ * they are on by default at every level now (repo#2729), old depths included, and
+ * a caller turns them off explicitly. They are `custom` settings by construction,
+ * except where they happen to equal a level.
  */
 export const LEGACY_CLOUD_DEPTH_PROFILES = ["fast", "surface", "deep", "full"] as const;
 export type LegacyCloudDepthProfile = (typeof LEGACY_CLOUD_DEPTH_PROFILES)[number];
@@ -266,7 +273,7 @@ const LEGACY_CLOUD_DEPTHS: Readonly<
       crawlStrategy: "seed-and-sitemap",
       cloudChecks: true,
       render: "all",
-      externalLinks: false,
+      externalLinks: true,
       probe: "passive",
     },
   },
@@ -277,7 +284,7 @@ const LEGACY_CLOUD_DEPTHS: Readonly<
       crawlStrategy: "sampled",
       cloudChecks: true,
       render: "all",
-      externalLinks: false,
+      externalLinks: true,
       probe: "passive",
     },
   },
@@ -288,7 +295,7 @@ const LEGACY_CLOUD_DEPTHS: Readonly<
       crawlStrategy: "sampled",
       cloudChecks: true,
       render: "all",
-      externalLinks: false,
+      externalLinks: true,
       probe: "passive",
     },
   },
@@ -299,7 +306,7 @@ const LEGACY_CLOUD_DEPTHS: Readonly<
       crawlStrategy: "all",
       cloudChecks: true,
       render: "all",
-      externalLinks: false,
+      externalLinks: true,
       probe: "passive",
     },
   },

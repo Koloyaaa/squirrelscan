@@ -243,7 +243,7 @@ export function registerAuditTools(server: McpServer): void {
     {
       title: "Audit a website",
       description:
-        "Run a deterministic website audit (performance, security, accessibility, content, structured data, and more) of a URL and return an LLM-optimized report. Signed out it runs on this machine with no cloud call. Signed in it is a billed cloud audit, the same as `squirrel audit`: 50 credits plus 2 per audited page at every level, with pages that need JavaScript rendered in the cloud browser and, at surface and full, the cloud checks. The first call returns the estimate as status confirmation_required; show it to the user and call again with confirm: true to start. An audit the balance cannot cover is refused with the cost and the balance. Pass offline: true for a local-only audit with no cloud call.",
+        "Run a deterministic website audit (performance, security, accessibility, content, structured data, and more) of a URL and return an LLM-optimized report. Signed out it runs on this machine with no cloud call. Signed in it is a billed cloud audit, the same as `squirrel audit`: 50 credits plus 2 per audited page at every level, with pages that need JavaScript rendered in the cloud browser and, at surface and full, the cloud checks. Every level checks internal and external links (switch them off with `[external_links] enabled = false` or `[internal_links] enabled = false` in squirrel.toml); a link check that did not run is listed under not-checked in the report, never as clean. The first call returns the estimate as status confirmation_required; show it to the user and call again with confirm: true to start. An audit the balance cannot cover is refused with the cost and the balance. Pass offline: true for a local-only audit with no cloud call.",
       inputSchema: z.object({
         url: z.string().describe("The URL to audit (e.g. https://example.com)"),
         level: z.enum(AUDIT_LEVELS).optional().describe(LEVEL_DESCRIPTION),
@@ -315,7 +315,7 @@ export function registerAuditTools(server: McpServer): void {
     "quick_check",
     {
       title: "Quick check",
-      description: `Fast, local-only audit at the quick level: the URL and its sitemaps, up to ${AUDIT_LEVEL_PRESETS.quick.pages} pages, with no link following and no cloud checks. Works offline. Use for a rapid health snapshot of a site.`,
+      description: `Fast, local-only audit at the quick level: the URL and its sitemaps, up to ${AUDIT_LEVEL_PRESETS.quick.pages} pages, with no link following and no cloud checks. Internal link targets are status-checked; external links are not, because it runs offline. Use for a rapid health snapshot of a site.`,
       inputSchema: z.object({
         url: z.string().describe("The URL to check (e.g. https://example.com)"),
       }),

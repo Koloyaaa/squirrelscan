@@ -43,7 +43,7 @@ describe("the three levels", () => {
         crawlStrategy: "seed-and-sitemap",
         cloudChecks: false,
         render: "auto",
-        externalLinks: false,
+        externalLinks: true,
         probe: "passive",
       },
       surface: {
@@ -275,9 +275,9 @@ describe("the old cloud depths", () => {
     }
   });
 
-  test("they all keep external links off, as the cloud did", () => {
+  test("they check external links, like every level now (repo#2729)", () => {
     for (const p of LEGACY_CLOUD_DEPTH_PROFILES) {
-      expect(legacyCloudDepthSettings(p).settings.externalLinks).toBe(false);
+      expect(legacyCloudDepthSettings(p).settings.externalLinks).toBe(true);
     }
   });
 
@@ -294,7 +294,10 @@ describe("AUDIT_LEVEL_COPY quick summary", () => {
     const summary = AUDIT_LEVEL_COPY.quick.summary;
     expect(summary).toContain("25 pages");
     expect(summary).toContain("rendered in the cloud");
-    expect(summary).toContain("Costs credits: 50 plus 2 per page, up to 100");
+    expect(summary).toContain("with internal and external link checks");
+    expect(summary).toContain(
+      "Costs credits: 50, plus 2 per page and 1 per external link checked, up to 125",
+    );
     expect(summary).not.toMatch(/no credits|local rules only|free/i);
   });
 });

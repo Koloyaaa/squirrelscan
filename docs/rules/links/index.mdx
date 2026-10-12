@@ -55,6 +55,22 @@ Links rules read the link graph the crawl built. Half of them are health checks:
   </Card>
 </CardGroup>
 
+## Link checking is on by default
+
+Every audit checks links, at every [audit level](/guides/audit-levels), Quick included. Internal link targets the crawl did not fetch get a status-only request (up to 200, most-linked first, free), and external links are checked up to the audit's page budget (at least 10, most-linked first). In a cloud audit each checked external link costs 1 credit, so the most an audit can spend on them is one credit per page of its budget, and the audit's estimate includes it.
+
+Earlier releases only checked external links at Surface and Full, and the Quick level reported broken links as passing when it had not checked them.
+
+To switch link checks off:
+
+| Where | External links | Internal links |
+|-------|----------------|----------------|
+| One CLI run | `--no-external-links` | `--no-internal-links` |
+| `squirrel.toml` | `[external_links] enabled = false` | `[internal_links] enabled = false` |
+| A cloud website | The website's **External link checks** setting | |
+
+`--offline` also skips external links, since it promises no requests beyond the audited site. A check you switch off is reported as **Not checked** with the reason, never as a pass.
+
 ## Disable all Links rules
 
 ```toml squirrel.toml

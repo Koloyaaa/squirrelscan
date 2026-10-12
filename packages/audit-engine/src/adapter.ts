@@ -77,7 +77,11 @@ import type {
   SitemapUrlStatusData,
   SiteQuery,
 } from "@squirrelscan/core-contracts";
-import { CLOUD_RESOURCE_CHECK, REPORT_LIMITS } from "@squirrelscan/core-contracts/limits";
+import {
+  CLOUD_RESOURCE_CHECK,
+  LINK_CHECK_LIMITS,
+  REPORT_LIMITS,
+} from "@squirrelscan/core-contracts/limits";
 
 import { createFetchBudget, type FetchBudget, type FetchBudgetSummary } from "./fetch-budget";
 import {
@@ -540,6 +544,15 @@ export interface PreFetchedAssets {
   pdfSizes: ResourceSizeData[];
   sitemapUrlStatuses: SitemapUrlStatusData[];
   /**
+   * Status of internal link targets the crawl did not fetch (repo#2729): one
+   * HEAD (then GET) per target, most-linked first, read by links/broken-links as
+   * known statuses. Optional: absent when internal link checks were off, and on
+   * assets a caller builds by hand.
+   */
+  linkTargetStatuses?: SitemapUrlStatusData[];
+  /** What the internal link probe covered: targets it could not reach, and how many it checked. */
+  internalLinkProbe?: { unfetched: number; probed: number; cap: number };
+  /**
    * #1252: set only when the asset-fetch step degraded (total budget spent or a
    * host tarpitting) and some fetches were skipped. Undefined on a healthy run,
    * so nothing changes downstream unless the phase actually hit a wall. Surfaced
@@ -574,7 +587,23 @@ export interface SiteAssetOccurrences {
   /** Every page absorbed, WAF and non-HTML included — v1's `siteContext.length`,
    * which sizes the script fetcher's per-page budget. */
   pageCount: number;
+  /**
+   * Internal link targets (repo#2729), keyed by normalized URL: the URL as
+   * linked and how many pages link to it. Bounded at
+   * MAX_TRACKED_INTERNAL_LINK_TARGETS distinct targets.
+   */
+  internalLinkTargets: Map<string, { url: string; pages: number }>;
+  /** Normalized URL of every page the crawl stored, non-HTML and 4xx included. */
+  crawledUrls: Set<string>;
 }
+
+/**
+ * Distinct internal link targets the asset collector remembers (repo#2729).
+ * Far above what one audit probes (LINK_CHECK_LIMITS.internalTargetProbes), so
+ * the most-linked ones are always among them, and bounded so a site with a
+ * million links costs a bounded map.
+ */
+const MAX_TRACKED_INTERNAL_LINK_TARGETS = 50_000;
 
 function emptySiteAssetOccurrences(): SiteAssetOccurrences {
   return {
@@ -586,6 +615,8 @@ function emptySiteAssetOccurrences(): SiteAssetOccurrences {
     fonts: new Map(),
     coveragePages: [],
     pageCount: 0,
+    internalLinkTargets: new Map(),
+    crawledUrls: new Set(),
   };
 }
 
@@ -615,6 +646,11 @@ export function createSiteAssetCollector(baseUrl: string): {
       // Same filtering as runRulesOnStorage: parsed, non-WAF. Note the page
       // COUNT below still counts every page, matching v1's siteContext.length.
       occurrences.pageCount += siteContext.length;
+      // repo#2729: every stored page, so the link probe skips what the crawl
+      // already fetched (a 404 the crawler stored is a known status, not a gap).
+      for (const { page } of siteContext) {
+        occurrences.crawledUrls.add(normalizeUrl(page.normalizedUrl));
+      }
       const parsedPages: Array<{
         url: string;
         finalUrl?: string;
@@ -655,6 +691,23 @@ export function createSiteAssetCollector(baseUrl: string): {
 
       // Needs the DOM (stylesheet + script srcs aren't in stored parsedData).
       absorbResourceOccurrences(occurrences, parsedPages, baseUrl);
+
+      // Internal link targets for the link probe (repo#2729), from the same
+      // parsed scalars links/broken-links reads, normalized the way it does.
+      for (const page of parsedPages) {
+        const seen = new Set<string>();
+        for (const link of page.parsed.links) {
+          if (!link.isInternal || !link.url || link.error) continue;
+          const key = normalizeUrl(link.url);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const entry = occurrences.internalLinkTargets.get(key);
+          if (entry) entry.pages++;
+          else if (occurrences.internalLinkTargets.size < MAX_TRACKED_INTERNAL_LINK_TARGETS) {
+            occurrences.internalLinkTargets.set(key, { url: link.url, pages: 1 });
+          }
+        }
+      }
 
       // PDF links come from parsed scalars.
       for (const page of parsedPages) {
@@ -861,6 +914,17 @@ export function fetchAssetsFromOccurrences(
 
     const pdfCheckLimit = Math.min(pdfUrls.size, maxResources ?? 50);
 
+    // repo#2729: internal link targets the crawl never fetched, most-linked
+    // first, so a linked 404 is found even when the crawl did not follow links.
+    const internalLinksEnabled = config.internal_links?.enabled !== false;
+    const probeCap = config.internal_links?.max_targets ?? LINK_CHECK_LIMITS.internalTargetProbes;
+    const unfetchedTargets = internalLinksEnabled
+      ? Array.from(occurrences.internalLinkTargets.entries())
+          .filter(([key]) => !occurrences.crawledUrls.has(key))
+          .sort(([ak, a], [bk, b]) => b.pages - a.pages || (ak < bk ? -1 : ak > bk ? 1 : 0))
+      : [];
+    const probeTargets = unfetchedTargets.slice(0, probeCap).map(([, target]) => target.url);
+
     const resourceCheckStart = Date.now();
 
     const allResourceChecks = Effect.all(
@@ -907,6 +971,8 @@ export function fetchAssetsFromOccurrences(
           orphanCandidates.slice(0, sitemapStatusLimit),
           resourceCheckOptions,
         ),
+        // Status only: the same cheap HEAD (then GET) path as the sitemap pool.
+        linkTargets: checkResourceSizes(probeTargets, resourceCheckOptions),
       },
       { concurrency: 5 },
     );
@@ -939,6 +1005,7 @@ export function fetchAssetsFromOccurrences(
               preloads: [] as ScriptFetchResult[],
               pdfs: [] as ResourceCheckResult[],
               sitemap: [] as ResourceCheckResult[],
+              linkTargets: [] as ResourceCheckResult[],
             });
           },
         )
@@ -1041,6 +1108,21 @@ export function fetchAssetsFromOccurrences(
         // to crawl/sitemap-4xx, which would otherwise report it as dead.
         rateLimited: check.rateLimited,
       })),
+      ...(internalLinksEnabled
+        ? {
+            linkTargetStatuses: resourceResults.linkTargets.map((check) => ({
+              url: check.url,
+              status: check.status,
+              error: check.error,
+              rateLimited: check.rateLimited,
+            })),
+            internalLinkProbe: {
+              unfetched: unfetchedTargets.length,
+              probed: resourceResults.linkTargets.length,
+              cap: probeCap,
+            },
+          }
+        : {}),
     };
 
     // #1252: only attach the degradation summary when the phase actually hit a
@@ -1485,6 +1567,9 @@ export function runRulesOnStorage(
       // links/broken-external-links reports "not checked" instead of passing.
       externalLinks: config.external_links?.enabled === false ? undefined : externalLinksData,
       linkDiscoveryOff: crawl?.stats?.linkDiscoveryOff === true,
+      externalLinkCheck: crawl?.stats?.externalLinkCheck,
+      linkTargetStatuses: assets.linkTargetStatuses,
+      internalLinkProbe: assets.internalLinkProbe,
       resourceSizes,
       scripts,
       preloadedScripts,
@@ -2209,6 +2294,9 @@ function buildStreamingSiteData(
       // repo#2729: see runRulesOnStorage — undefined means "not checked".
       externalLinks: config.external_links?.enabled === false ? undefined : externalLinksData,
       linkDiscoveryOff: crawl?.stats?.linkDiscoveryOff === true,
+      externalLinkCheck: crawl?.stats?.externalLinkCheck,
+      linkTargetStatuses: assets.linkTargetStatuses,
+      internalLinkProbe: assets.internalLinkProbe,
       resourceSizes,
       scripts,
       preloadedScripts,
@@ -2889,6 +2977,25 @@ export function absorbExternalLinkOccurrences(
   }
 }
 
+/**
+ * The external links an audit checks under a `max_links` limit (repo#2729):
+ * all of them when there is no limit or they fit, else the ones on the most
+ * pages first, ties broken by URL so the same crawl always checks the same set.
+ */
+export function selectExternalLinksToCheck(
+  occurrences: ExternalLinkOccurrences,
+  maxLinks: number | undefined,
+): string[] {
+  const hrefs = Array.from(occurrences.keys());
+  if (maxLinks === undefined || hrefs.length <= maxLinks) return hrefs;
+  const pagesOf = (href: string): number =>
+    new Set((occurrences.get(href) ?? []).map((o) => o.pageUrl)).size;
+  const ranked = hrefs
+    .map((href) => ({ href, pages: pagesOf(href) }))
+    .sort((a, b) => b.pages - a.pages || (a.href < b.href ? -1 : a.href > b.href ? 1 : 0));
+  return ranked.slice(0, Math.max(0, maxLinks)).map((r) => r.href);
+}
+
 export function checkExternalLinksOnStorage(
   storage: CrawlStorage,
   crawlId: string,
@@ -2940,7 +3047,22 @@ export function checkCollectedExternalLinks(
     const cache = linkCache ?? null;
     const ttlSeconds = config.cache_ttl_days * 24 * 60 * 60;
 
-    const results = yield* checkExternalLinks(Array.from(externalLinkOccurrences.keys()), cache, {
+    // repo#2729: link checks are on by default, and in the cloud each link is a
+    // credit, so an audit checks at most `max_links` of them: the most-linked
+    // first (nav and footer links every page shares), then by URL so the choice
+    // is stable. The rest are counted and reported as not checked.
+    const hrefs = selectExternalLinksToCheck(externalLinkOccurrences, config.max_links);
+    yield* storage
+      .updateStats(crawlId, {
+        externalLinkCheck: {
+          found: externalLinkOccurrences.size,
+          checked: hrefs.length,
+          cap: config.max_links ?? externalLinkOccurrences.size,
+        },
+      })
+      .pipe(Effect.catchAll(() => Effect.void));
+
+    const results = yield* checkExternalLinks(hrefs, cache, {
       ttlSeconds,
       concurrency: config.concurrency,
       timeoutMs: config.timeout_ms,
