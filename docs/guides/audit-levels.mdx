@@ -26,14 +26,14 @@ squirrel audit https://example.com --level full
 | External link checks | On | On | On |
 | Probing | `passive` | `active` | `active` |
 | Credits, signed-in CLI | Up to 100 | Up to 250 | Up to 1,050 |
-| Credits, cloud audit | Up to 100 | Up to 350 | Up to 1,550 |
+| Credits, cloud audit | Up to 125 | Up to 350 | Up to 1,550 |
 | Plans | All | All | Pro and Team in the cloud |
 
 - **Cloud checks** are the checks that run in squirrelscan's cloud: [AI page analysis](/rules/ai/llm-parsability), [authority signals](/rules/eeat/authority-signals), the [editor's summary](/cloud/editor-summary) and [technology detection](/cloud/technologies). The rest of the rules run at every level.
 - **Rendering** loads pages in a cloud browser, so the audit sees content that JavaScript builds. See [Browser rendering](/guides/browser-rendering).
 - **Probing** is how hard each page is poked beyond what the crawl fetched. `passive` sends nothing extra, `active` sends a few quiet requests that look like normal traffic. `aggressive` is never a level's default; you have to ask for it. Cloud audits (the dashboard, the API and the hosted MCP server) probe passively at every level for now. See [Security configuration](/configuration/security).
 - **Link checks** run at every level and are switched off, not on. Internal link targets the crawl did not fetch get a status-only request (up to 200 per audit, most-linked first), and external links are checked up to the audit's page budget or 200, whichever is more, most-linked first. Anything over a limit is reported as **Not checked**. See [Link checking](/rules/links#link-checking-is-on-by-default).
-- **Credits** follow the pages: 50 for the audit plus 2 per audited page, so a 40-page surface audit costs 130. This holds at every level, quick included. A cloud audit also charges 1 credit per distinct external link it checks, never more than one per page of its budget, and its quote reserves that on the levels that check links, which is why the cloud figures for surface and full are higher. Internal link checks are free, and so are the checks the CLI runs for itself. Credits apply to signed-in, online audits: signed out or with `--offline`, the audit runs locally, no account needed. See [Credits and pricing](/cloud/credits).
+- **Credits** follow the pages: 50 for the audit plus 2 per audited page, so a 40-page surface audit costs 130. This holds at every level, quick included. A cloud audit also charges 1 credit per distinct external link it checks, never more than one per page of its budget, and its quote reserves that, which is why the cloud figures are higher. Internal link checks are free, and so are the checks the CLI runs for itself. Credits apply to signed-in, online audits: signed out or with `--offline`, the audit runs locally, no account needed. See [Credits and pricing](/cloud/credits).
 
 ### Quick
 
