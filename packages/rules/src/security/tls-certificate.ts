@@ -9,6 +9,7 @@ import {
   daysUntil,
   isoDate,
   probeTlsCertificate,
+  untrustedRootText,
   type TlsCertificate,
   type TlsProblem,
   type TlsProbe,
@@ -250,7 +251,7 @@ function describeProblem(
     case "incomplete-chain":
       return "incomplete chain: the server does not send the intermediate certificate needed to reach a trusted root";
     case "untrusted-root":
-      return `the certificate chains to an untrusted root (${problem.code})`;
+      return untrustedRootText(problem.code);
   }
 }
 

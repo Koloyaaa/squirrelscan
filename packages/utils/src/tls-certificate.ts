@@ -78,6 +78,28 @@ interface RawCertificate {
 }
 
 /**
+ * Test-only route: send a handshake for `hostname` to a local fixture server
+ * instead of resolving it. `null` makes the name not resolve. Lets an audit run
+ * against a public-looking name with no DNS and no live host. Never set in
+ * production code; `routeTlsHostForTests` returns the function that removes it.
+ */
+export interface TlsTestRoute {
+  address: string;
+  port: number;
+  ca?: string;
+}
+
+const testRoutes = new Map<string, TlsTestRoute | null>();
+
+export function routeTlsHostForTests(hostname: string, route: TlsTestRoute | null): () => void {
+  const key = hostname.toLowerCase();
+  testRoutes.set(key, route);
+  return () => {
+    testRoutes.delete(key);
+  };
+}
+
+/**
  * Open one TLS connection to `target`, read the leaf certificate and close it.
  * Never throws: every failure is a `TlsProbe` result.
  */
@@ -85,6 +107,12 @@ export async function probeTlsCertificate(
   target: TlsTarget,
   options: TlsProbeOptions = {},
 ): Promise<TlsProbe> {
+  const { hostname } = target;
+  const routed = testRoutes.get(hostname.toLowerCase());
+  if (routed === null) {
+    return { kind: "unreachable", code: "ENOTFOUND", message: `${hostname} does not resolve` };
+  }
+
   let tls: typeof import("node:tls");
   try {
     tls = await import("node:tls");
@@ -96,8 +124,9 @@ export async function probeTlsCertificate(
   }
 
   const timeoutMs = options.timeoutMs ?? TLS_PROBE_TIMEOUT_MS;
-  const port = target.port ?? 443;
-  const { hostname } = target;
+  const port = routed?.port ?? target.port ?? 443;
+  const address = routed?.address ?? options.address ?? hostname;
+  const ca = routed?.ca ?? options.ca;
 
   return new Promise<TlsProbe>((resolve) => {
     let socket: import("node:tls").TLSSocket | undefined;
@@ -122,13 +151,13 @@ export async function probeTlsCertificate(
     let connection: import("node:tls").TLSSocket;
     try {
       connection = tls.connect({
-        host: options.address ?? hostname,
+        host: address,
         port,
         // SNI and verification both use the name; an IP literal has no SNI name.
         ...(isIP(hostname) === 0 ? { servername: hostname } : {}),
         // Verification is done here, on the facts, so every served certificate can be read.
         rejectUnauthorized: false,
-        ...(options.ca !== undefined ? { ca: options.ca } : {}),
+        ...(ca !== undefined ? { ca } : {}),
         timeout: timeoutMs,
       });
     } catch (error) {
@@ -278,8 +307,24 @@ export function tlsFailureCause(probe: TlsProbe, hostname: string, now: Date): s
     case "incomplete-chain":
       return "unable to verify the first certificate: the server did not send its intermediate certificate";
     case "untrusted-root":
-      return `the certificate does not chain to a trusted root (${problem.code})`;
+      return untrustedRootText(problem.code);
   }
+}
+
+/**
+ * The sentence for a chain that does not verify to a trusted root. Bun reports
+ * a missing intermediate as UNABLE_TO_VERIFY_LEAF_SIGNATURE, which is judged an
+ * incomplete chain. UNABLE_TO_GET_ISSUER_CERT_LOCALLY is what the same runtime
+ * reports for a complete chain under a root it does not trust, and a chain
+ * missing its intermediate can surface under that code too. Only the served
+ * chain could tell them apart, and this runtime does not expose it, so the
+ * sentence names both possibilities.
+ */
+export function untrustedRootText(code: string): string {
+  if (code === "UNABLE_TO_GET_ISSUER_CERT_LOCALLY") {
+    return `the chain does not verify to a trusted root: an intermediate may be missing, or the root is not trusted (${code})`;
+  }
+  return `the certificate chains to an untrusted root (${code})`;
 }
 
 /** Whole days from `now` until `date`, rounded down; negative once it has passed. */

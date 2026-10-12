@@ -53,7 +53,9 @@ interface Authority {
   cert: string;
 }
 
-const LOCAL_SAN = "subjectAltName=DNS:localhost,IP:127.0.0.1";
+// tls-fixture.test is a public-looking name the pipeline tests route to these
+// certificates; localhost and the loopback IP keep the direct socket tests.
+const LOCAL_SAN = "subjectAltName=DNS:localhost,DNS:tls-fixture.test,IP:127.0.0.1";
 
 export function createTlsFixtures(): TlsFixtures {
   const dir = mkdtempSync(join(tmpdir(), "squirrel-tls-"));
