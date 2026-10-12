@@ -52,7 +52,31 @@ export const HEADER_PATTERNS: {
   },
 ];
 
-/** Content-based WAF signatures (challenge/block pages) */
+/**
+ * The path of the script a Cloudflare challenge page loads to run the
+ * challenge (`/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1`).
+ * Only a challenge loads it. Every page with JavaScript Detections or Bot Fight
+ * Mode also loads a script from `/cdn-cgi/challenge-platform/`
+ * (`scripts/jsd/main.js`), so the bare directory says the site is on
+ * Cloudflare, not that the page is a challenge (#666).
+ */
+export const CLOUDFLARE_CHALLENGE_SCRIPT = /\/cdn-cgi\/challenge-platform\/(?:h\/[\w-]+\/)?orchestrate\//i;
+
+/** Akamai's deny-page reference id, such as `Reference #18.9d367a83.1614887475.2b3c78d`. */
+const AKAMAI_REFERENCE_ID = /reference\s*#\s*\d+\.[0-9a-f]+\.\d+\.[0-9a-f]+/i;
+
+/** Imperva's block-page line with its id: `Incapsula incident ID: 1234000280151781213-1234`. */
+const IMPERVA_INCIDENT_LINE = /incapsula incident id\s*(?::|&#58;)?\s*(?:<[^>]*>\s*)*\d/i;
+
+/** A dash as block pages write it: hyphen, en dash, or either as an entity. */
+const DASH = "(?:-|\\u2013|&#8211;|&ndash;)";
+
+/**
+ * Content-based WAF signatures: markup, script hosts and reference formats the
+ * provider's own infrastructure emits. Never the provider's name or a phrase a
+ * page could print while talking about it: a blog post that mentions Imperva is
+ * not behind Imperva (#667).
+ */
 export const CONTENT_PATTERNS: {
   provider: WafProvider;
   patterns: RegExp[];
@@ -61,69 +85,113 @@ export const CONTENT_PATTERNS: {
   {
     provider: "cloudflare",
     patterns: [
-      /checking your browser/i,
-      /cloudflare ray id/i,
+      // The legacy "I'm Under Attack" interstitial's line, in full.
+      /checking your browser before accessing/i,
+      // Error pages print the ray id after the label; the label alone is prose.
+      /cloudflare ray id:?\s*(?:<[^>]*>\s*)*[0-9a-f]{6,}\b/i,
       /cf-browser-verification/i,
       /__cf_chl_/,
-      /challenge-platform/i,
+      /_cf_chl_opt/,
+      // Attribution only: JSD pages load from here too, so this says the site
+      // is on Cloudflare, never that the page is a challenge (that is
+      // CLOUDFLARE_CHALLENGE_SCRIPT, in CHALLENGE_MARKUP_PATTERNS).
+      /\/cdn-cgi\/challenge-platform\//i,
     ],
     confidence: "high",
   },
   {
     provider: "akamai",
     patterns: [
-      /access denied.*akamai/i,
-      /reference\s*#\s*[\d.]+/i,
+      AKAMAI_REFERENCE_ID,
       // Akamai deny/challenge pages entity-encode the reference line in the
       // raw HTML ("Reference&#32;&#35;18&#46;..."), so the plain-# pattern
       // above never sees it (#802).
       /reference&#32;&#35;\s*\d/i,
+      // Newer deny pages link the reference to Akamai's error host.
+      /errors(?:\.|&#46;)edgesuite(?:\.|&#46;)net/i,
     ],
     confidence: "medium",
   },
   {
     provider: "sucuri",
-    patterns: [/sucuri website firewall/i, /access denied - sucuri/i],
+    // The block page's title and heading, in full.
+    patterns: [
+      new RegExp(`sucuri website ?firewall\\s*${DASH}\\s*(?:cloudproxy\\s*${DASH}\\s*)?access denied`, "i"),
+      new RegExp(`access denied\\s*${DASH}\\s*sucuri website ?firewall`, "i"),
+    ],
     confidence: "high",
   },
   {
     provider: "imperva",
-    patterns: [/incapsula incident id/i, /powered by incapsula/i, /imperva/i],
+    // The block page's incident line carries its id, and Imperva serves its
+    // own scripts and block iframe from /_Incapsula_Resource.
+    patterns: [IMPERVA_INCIDENT_LINE, /\/_Incapsula_Resource\b/i],
     confidence: "high",
   },
   {
     provider: "datadome",
-    patterns: [/datadome/i, /dd\.js/],
+    // The tag's host, a script from the captcha host, and the key the tag is
+    // configured with. Hosts are matched where a script loads them (`src=`).
+    patterns: [
+      /js\.datadome\.co\b/i,
+      /src\s*=\s*["']?(?:https?:)?\/\/[\w.-]*captcha-delivery\.com/i,
+      /\bddjskey\b/,
+    ],
     confidence: "medium",
   },
   {
     provider: "perimeterx",
-    patterns: [/px-captcha/i, /perimeterx/i, /_pxCaptcha/],
+    patterns: [
+      /px-captcha/i,
+      /_pxCaptcha/,
+      /\b_pxAppId\b/,
+      /src\s*=\s*["']?(?:https?:)?\/\/client\.perimeterx\.net/i,
+    ],
     confidence: "high",
   },
   {
     provider: "kasada",
-    patterns: [/ips\.js/i, /cd\.js/, /kasada/i],
+    // KPSDK is Kasada's client object; its script is ips.js under two UUIDs.
+    patterns: [
+      /\bwindow\.KPSDK\b/,
+      /\bKPSDK\.configure\b/,
+      /\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/ips\.js\b/i,
+    ],
     confidence: "medium",
   },
 ];
 
-/** Challenge interstitial patterns for WAF challenge page detection */
-export const CHALLENGE_INTERSTITIAL_PATTERNS = [
-  /checking your browser/i,
+/**
+ * Markup only a challenge or block page carries. With a challenge status or a
+ * WAF's own headers or markup it marks the page as a challenge, even at 200.
+ */
+export const CHALLENGE_MARKUP_PATTERNS = [
   /cf-browser-verification/i,
   /__cf_chl_/i,
-  /challenge-platform/i,
-  /just a moment/i,
-  /incapsula incident id/i,
-  /access denied[^<]{0,120}(reference\s*#|incident id)/i,
+  /_cf_chl_opt/,
+  CLOUDFLARE_CHALLENGE_SCRIPT,
+  IMPERVA_INCIDENT_LINE,
   // Akamai's real deny page tag-breaks the heading (<H1>Access Denied</H1>)
   // and entity-encodes the reference ("Reference&#32;&#35;18&#46;..."), so the
-  // combined pattern above misses it; &#32;&#35; is Akamai-specific enough to
-  // stand alone (#802).
+  // combined text pattern below misses it; &#32;&#35; is Akamai-specific enough
+  // to stand alone (#802). The plain reference id needs the denial before it: a
+  // troubleshooting page can quote one. The gap between them stays bounded: each
+  // "access denied" in the 10 KB sample costs at most a 2 KB scan.
   /reference&#32;&#35;\s*\d/i,
+  new RegExp(`access denied[\\s\\S]{0,2000}?${AKAMAI_REFERENCE_ID.source}`, "i"),
   /_pxCaptcha/i,
   /px-captcha/i,
+];
+
+/**
+ * What a challenge page says, which an ordinary page can say too ("just a
+ * moment", in a recipe). It marks a challenge only together with a challenge
+ * status: a 200 page on a protected site that says it is still content (#666).
+ */
+export const CHALLENGE_TEXT_PATTERNS = [
+  /checking your browser/i,
+  /just a moment/i,
+  /access denied[^<]{0,120}(reference\s*#|incident id)/i,
 ];
 
 export const WAF_CHALLENGE_STATUS_CODES = new Set([401, 403, 429, 503]);
@@ -131,7 +199,7 @@ export const WAF_CHALLENGE_STATUS_CODES = new Set([401, 403, 429, 503]);
 /**
  * Fingerprints for provider bot-challenge interstitials served at HTTP 200 (#513).
  * DataDome/Kasada answer with 200 and no generic interstitial string, so
- * CHALLENGE_INTERSTITIAL_PATTERNS misses them. Both tiers only count on a tiny-text
+ * CHALLENGE_MARKUP_PATTERNS and CHALLENGE_TEXT_PATTERNS miss them. Both tiers only count on a tiny-text
  * body (see CHALLENGE_INTERSTITIAL_MAX_TEXT). `strongMarkers` are challenge-only hosts,
  * trusted at any status. `weakMarkers` also load on a protected site's normal pages
  * (e.g. a sparse SPA shell that embeds the WAF SDK), so they additionally require a
