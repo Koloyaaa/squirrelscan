@@ -76,6 +76,70 @@ function decodeXmlEscapes(value: string): string {
     .replace(/&amp;/g, "&");
 }
 
+/**
+ * The text of one sitemap field, or undefined when it is not one text value.
+ *
+ * The parser keeps every text node a string (`parseTagValue: false`), so a
+ * field is a string, or an element object when it carries attributes (its
+ * text under `#text`, absent when empty). Anything else is not one text value:
+ * a child element, including a raw `<` in a URL that the parser reads as a
+ * tag and that can swallow the entries after it, or the field repeated within
+ * one entry (an array). Text around a child element is never the value (#687).
+ */
+function fieldText(value: unknown): string | undefined {
+  if (typeof value === "string") return value.trim();
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  let text = "";
+  for (const [key, part] of Object.entries(value)) {
+    if (key === "#text" && typeof part === "string") text = part;
+    else if (!key.startsWith("@_")) return undefined;
+  }
+  return text.trim();
+}
+
+/** The entries of one sitemap element (`<url>` or `<sitemap>`), each as a field map. */
+function sitemapEntries(value: unknown): Record<string, unknown>[] {
+  const entries = Array.isArray(value) ? value : [value];
+  // An empty element parses as "", a bare text body as a string: neither has fields.
+  return entries.filter(
+    (entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null,
+  );
+}
+
+type SitemapField = "loc" | "lastmod" | "changefreq" | "priority";
+
+/**
+ * Reads entry fields through {@link fieldText} and counts, per field, the ones
+ * present but not one text value. {@link errors} turns the counts into one
+ * error per field for the sitemap, so one bad entry costs only itself (#687):
+ * an entry without a readable `<loc>` is skipped, any other bad field is
+ * dropped and its URL kept.
+ */
+function createFieldReader(element: "url" | "sitemap") {
+  const unreadable = new Map<SitemapField, number>();
+  return {
+    read(entry: Record<string, unknown>, field: SitemapField): string | undefined {
+      if (entry[field] === undefined) return undefined;
+      const text = fieldText(entry[field]);
+      if (text === undefined) unreadable.set(field, (unreadable.get(field) ?? 0) + 1);
+      return text;
+    },
+    errors(): string[] {
+      const errors: string[] = [];
+      for (const field of ["loc", "lastmod", "changefreq", "priority"] as const) {
+        const count = unreadable.get(field);
+        if (!count) continue;
+        errors.push(
+          field === "loc"
+            ? `${count} <${element}> ${count === 1 ? "entry" : "entries"} skipped: <loc> is not a single text value`
+            : `${count} <${field}> ${count === 1 ? "value" : "values"} ignored: not a single text value`,
+        );
+      }
+      return errors;
+    },
+  };
+}
+
 export function parseSitemap(content: string, url: string): SitemapData {
   const errors: string[] = [];
   const parser = new XMLParser({
@@ -83,25 +147,27 @@ export function parseSitemap(content: string, url: string): SitemapData {
     attributeNamePrefix: "@_",
     trimValues: true,
     processEntities: false,
+    // #687: keep every value as the text the sitemap wrote. Number parsing
+    // turned `<lastmod>2024</lastmod>`, a valid W3C Datetime, into the number
+    // 2024, and the string handling below then failed the whole file.
+    parseTagValue: false,
   });
-
-  const ensureArray = <T>(value: T | T[] | undefined): T[] => {
-    if (!value) return [];
-    return Array.isArray(value) ? value : [value];
-  };
 
   try {
     const parsed = parser.parse(content) as Record<string, unknown>;
 
     if (parsed.sitemapindex) {
-      const sitemapIndex = parsed.sitemapindex as {
-        sitemap?: { loc?: string } | { loc?: string }[];
-      };
-      const sitemapEntries = ensureArray(sitemapIndex.sitemap);
-      const childSitemaps = sitemapEntries
-        .map((entry) => entry.loc?.trim())
-        .filter((loc): loc is string => Boolean(loc))
-        .map(decodeXmlEscapes);
+      const sitemapIndex = parsed.sitemapindex as { sitemap?: unknown };
+      const childSitemaps: string[] = [];
+      const fields = createFieldReader("sitemap");
+      for (const entry of sitemapEntries(sitemapIndex.sitemap)) {
+        const loc = fields.read(entry, "loc");
+        if (loc) childSitemaps.push(decodeXmlEscapes(loc));
+        // Not stored, but read so a raw `<` in it, which can swallow the
+        // children after it, is reported rather than passed as valid.
+        fields.read(entry, "lastmod");
+      }
+      errors.push(...fields.errors());
 
       return {
         url,
@@ -114,45 +180,26 @@ export function parseSitemap(content: string, url: string): SitemapData {
     }
 
     if (parsed.urlset) {
-      const urlset = parsed.urlset as {
-        "@_xmlns:news"?: string;
-        url?:
-          | {
-              loc?: string;
-              lastmod?: string;
-              changefreq?: string;
-              priority?: string | number;
-            }
-          | {
-              loc?: string;
-              lastmod?: string;
-              changefreq?: string;
-              priority?: string | number;
-            }[];
-      };
-      const urlEntries = ensureArray(urlset.url);
+      const urlset = parsed.urlset as { "@_xmlns:news"?: string; url?: unknown };
       const urls: SitemapUrl[] = [];
+      const fields = createFieldReader("url");
 
-      for (const entry of urlEntries) {
-        const rawLoc = entry.loc?.trim();
+      for (const entry of sitemapEntries(urlset.url)) {
+        const rawLoc = fields.read(entry, "loc");
         if (!rawLoc) continue;
         const loc = decodeXmlEscapes(rawLoc);
 
-        const priorityRaw = entry.priority;
-        const priority =
-          typeof priorityRaw === "number"
-            ? priorityRaw
-            : priorityRaw
-              ? Number.parseFloat(priorityRaw)
-              : undefined;
+        const priorityText = fields.read(entry, "priority");
+        const priority = priorityText ? Number.parseFloat(priorityText) : undefined;
 
         urls.push({
           loc,
-          lastmod: entry.lastmod?.trim(),
-          changefreq: entry.changefreq?.trim(),
+          lastmod: fields.read(entry, "lastmod"),
+          changefreq: fields.read(entry, "changefreq"),
           priority: Number.isNaN(priority ?? Number.NaN) ? undefined : priority,
         });
       }
+      errors.push(...fields.errors());
 
       return {
         url,
