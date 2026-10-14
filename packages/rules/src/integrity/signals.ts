@@ -17,6 +17,7 @@ import { getDomain } from "tldts";
 
 import { getAttrCI } from "@squirrelscan/utils";
 
+import { getPageSeparatedText, getSeparatedText } from "../content/text-content";
 import type { RuleContext } from "../types";
 
 /** Distinct page-level compromise signals (one per page-scope rule). */
@@ -44,6 +45,46 @@ export interface PageSignalContext {
  * corroborating page signals. Below it, rules emit `info` only.
  */
 export const CORRELATION_THRESHOLD = 2;
+
+/**
+ * The lowercased title and page copy the auth and brand cues are read from.
+ * `content.textContent` glues adjacent elements, so `<h1>Welcome</h1><a>Sign
+ * in with Google</a>` reads `welcomesign in with google` and the word-bounded
+ * `sign in` test misses it (pub#696). The element-separated text is read too,
+ * so whitespace between elements cannot decide whether a cue is seen. Every
+ * test on this haystack asks whether a cue appears, so the extra text can only
+ * find a cue, never hide one.
+ */
+function authHaystack(ctx: PageSignalContext): string {
+  const doc = ctx.parsed.document;
+  const cached = doc ? haystackCache.get(doc) : undefined;
+  if (cached !== undefined) return cached;
+  const title = readable(ctx.parsed.meta.title ?? "");
+  const text = readable(ctx.parsed.content.textContent ?? "");
+  const separated = doc ? readable(getPageSeparatedText(doc)) : "";
+  const haystack = `${title}\n${text}\n${separated}`;
+  if (doc) haystackCache.set(doc, haystack);
+  return haystack;
+}
+
+/** One `authHaystack` per parsed document: several detectors read it. */
+const haystackCache = new WeakMap<object, string>();
+
+/**
+ * Characters that render as nothing: soft hyphens, zero-width spaces and
+ * joiners, invisible operators, variation selectors and the rest of Unicode's
+ * default-ignorable set.
+ */
+const INVISIBLE = /\p{Default_Ignorable_Code_Point}/gu;
+
+/**
+ * Text as a cue is matched against: lower case, the invisible characters
+ * gone and every run of whitespace (a newline, a double space, `&nbsp;`) one
+ * space, so none of them can split `sign in` or a brand phrase (pub#749).
+ */
+function readable(text: string): string {
+  return text.replace(INVISIBLE, "").replace(/\s+/g, " ").toLowerCase();
+}
 
 // ── Brand impersonation ─────────────────────────────────────────────
 //
@@ -209,28 +250,41 @@ function hrefHost(raw: string | null, base: string): string | null {
 function credentialDestinations(
   doc: NonNullable<RuleContext["parsed"]["document"]>,
   base: string
-): { host: string; brandLabeled: string }[] {
-  const out: { host: string; brandLabeled: string }[] = [];
+): { host: string; brandLabeled: string; signIn: boolean }[] {
+  const out: { host: string; brandLabeled: string; signIn: boolean }[] = [];
 
   // Password-form actions (or the page URL when the action is empty → self-post).
   for (const form of doc.querySelectorAll("form")) {
     if (!form.querySelector('input[type="password"]')) continue;
     const action = getAttrCI(form, "action");
     const host = hrefHost(action, base) ?? hrefHost(base, base);
-    if (host) out.push({ host, brandLabeled: "" });
+    if (host) out.push({ host, brandLabeled: "", signIn: false });
   }
 
   // Auth-labeled links: only links whose own text is a sign-in affordance.
+  const MAX_LABEL_CHARS = 300;
+  // The label is read as written and with a break at every element inside it
+  // (`Sign in with<br>Google`), whitespace and invisible characters collapsed.
   const AUTH_LABEL = /\b(sign in|log in|login|continue with|verify)\b/;
+  const SIGN_IN_LABEL = /\b(sign in|log in|login)\b/;
   for (const a of doc.querySelectorAll("a[href]")) {
-    const label = (a.textContent ?? "").toLowerCase();
-    if (!AUTH_LABEL.test(label)) continue;
+    // A label is a few words. The parser nests an unclosed `<a>` inside the
+    // next, so on junk markup every anchor holds the rest of the page, and
+    // reading each in full again would grow with the square of their number.
+    // A long label is still read, as before, without the extra passes: a kit
+    // can pad one with a `<style>` or hidden text.
+    const raw = a.textContent ?? "";
+    const short = raw.length <= MAX_LABEL_CHARS;
+    const glued = short ? readable(raw) : raw.toLowerCase();
+    const labels = [glued, short && a.firstElementChild ? readable(getSeparatedText(a)) : glued];
+    if (!labels.some((label) => AUTH_LABEL.test(label))) continue;
     const host = hrefHost(getAttrCI(a, "href"), base);
     if (!host) continue;
     const brand =
-      BRAND_SPECS.find((s) => s.lexicon.some((p) => label.includes(p)))?.brand ??
-      "";
-    out.push({ host, brandLabeled: brand });
+      BRAND_SPECS.find((s) => s.lexicon.some((p) => labels.some((label) => label.includes(p))))
+        ?.brand ?? "";
+    const signIn = labels.some((label) => SIGN_IN_LABEL.test(label));
+    out.push({ host, brandLabeled: brand, signIn });
   }
 
   return out;
@@ -250,16 +304,18 @@ export function detectBrandImpersonation(
   const doc = ctx.parsed.document;
   if (!doc) return null;
 
-  const title = (ctx.parsed.meta.title ?? "").toLowerCase();
-  const text = (ctx.parsed.content.textContent ?? "").toLowerCase();
-  const haystack = `${title}\n${text}`;
+  const haystack = authHaystack(ctx);
 
   const self = selfHosts(ctx);
   const credDests = credentialDestinations(doc, ctx.page.url);
 
-  // A credential affordance must exist at all (password field or auth copy).
+  // A credential affordance must exist at all: a password field, auth copy, or
+  // a control whose own label says sign in or log in, so a missing page-wide
+  // word boundary cannot override the control's evidence (pub#696). A link
+  // labelled only "verify" or "continue with" is not one by itself.
   const hasCredentialAffordance =
     doc.querySelector('input[type="password"]') !== null ||
+    credDests.some((d) => d.signIn) ||
     /\b(sign in|log in|login|enter your password|verify your account)\b/.test(
       haystack
     );
@@ -410,9 +466,7 @@ export function detectFakeAuthOverlay(
 
   // Page-level auth corroboration — required for the iframe-overlay branch so a
   // legitimate full-page app-shell / portal iframe doesn't trip it.
-  const haystack = `${(ctx.parsed.meta.title ?? "").toLowerCase()}\n${(
-    ctx.parsed.content.textContent ?? ""
-  ).toLowerCase()}`;
+  const haystack = authHaystack(ctx);
   const pageHasAuthAffordance =
     doc.querySelector('input[type="password"]') !== null ||
     /\b(sign in|log in|enter your password|verify your account)\b/.test(
