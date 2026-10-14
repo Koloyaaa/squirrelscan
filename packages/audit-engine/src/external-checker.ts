@@ -1,5 +1,13 @@
 // External link checker
 // Uses HEAD requests with GET fallback, optional cache, WAF detection
+//
+// repo#2759: a link that looks like an action or carries a token (a
+// third-party unsubscribe or magic link, a signed download URL) is never
+// requested; the URL itself can be the credential. The audit's entry point
+// (`checkCollectedExternalLinks`) leaves such links out before anything is
+// sent, the cloud bulk checker included, and redirects are followed by hand
+// here so a hop into one is not requested either. Same rules as the internal
+// link probe (`looksLikeAnAction`, @squirrelscan/utils/link-actions).
 
 import { Effect } from "effect";
 
@@ -12,6 +20,13 @@ import {
   fetchUndecoded,
   readBodyCapped,
 } from "@squirrelscan/utils/response-body";
+import { looksLikeAnAction } from "@squirrelscan/utils/link-actions";
+import {
+  EgressRefusedError,
+  egressGuardedSend,
+  type EgressPolicy,
+} from "@squirrelscan/utils/public-egress";
+import { isHttpOrHttpsUrl } from "@squirrelscan/utils/safe-fetch";
 import { detectWaf, type WafProvider } from "@squirrelscan/waf-detect";
 
 // ============================================
@@ -70,7 +85,23 @@ export interface ExternalCheckerOptions {
    * url.
    */
   bulkChecker?: (urls: string[]) => Promise<Map<string, ExternalCheckResult>>;
+  /**
+   * Every hop of every local request, the first included, is vetted against
+   * this policy before it is sent and connects to the address it was vetted
+   * on (`@squirrelscan/utils/public-egress`). A refused first request leaves
+   * the link unresolved, never broken; a refused redirect hop is not followed,
+   * and the redirect that pointed there is the link's answer. Absent: the
+   * strict default, {@link DEFAULT_EGRESS}, public addresses only. A caller
+   * auditing a private site passes `allowPrivateNetwork: true`.
+   */
+  egress?: EgressPolicy;
 }
+
+/**
+ * The policy when a caller gives none: fail closed. Public addresses only,
+ * never link-local or metadata, each hop pinned to the address vetted.
+ */
+export const DEFAULT_EGRESS: EgressPolicy = { allowPrivateNetwork: false };
 
 /** Max urls per bulk-checker call — mirrors SERVICE_LIMITS.deadLinksBatchUrls. */
 export const BULK_CHECK_CHUNK_SIZE = 200;
@@ -122,6 +153,71 @@ interface CheckUrlResult {
    * so its status is unverified rather than broken (#1829).
    */
   rateLimited?: boolean;
+  /** The egress policy refused the first request: nothing was sent, and nothing is cached. */
+  refused?: boolean;
+}
+
+/** Redirects followed per request, a browser's limit. */
+const MAX_REDIRECTS = 20;
+
+/** The statuses fetch's own `redirect: "follow"` follows; 300 and 304 are answers. */
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+/**
+ * One request, following redirects by hand: a hop whose Location is not
+ * http(s), looks like an action or token link (repo#2759), or is refused by
+ * the egress policy is not requested, and the 3xx that pointed there is the
+ * answer. Every hop, the first included, goes through the same guarded send,
+ * with no headers but User-Agent and Accept. `redirectTarget` is the last URL
+ * requested when the chain was followed to its end, or the Location that was
+ * not followed; null when the link answered without redirecting. A refused
+ * first request throws EgressRefusedError.
+ */
+async function requestFollowingSafeRedirects(
+  href: string,
+  method: "HEAD" | "GET",
+  options: ExternalCheckerOptions,
+  signal: AbortSignal,
+): Promise<{ response: Response; redirectTarget: string | null }> {
+  const send = egressGuardedSend(fetchUndecoded, options.egress ?? DEFAULT_EGRESS);
+  let current = href;
+  let previous: Response | null = null;
+  for (let hop = 0; ; hop++) {
+    let response: Response;
+    try {
+      response = await send(current, {
+        method,
+        headers: { "User-Agent": options.userAgent, Accept: "*/*" },
+        signal,
+        redirect: "manual",
+      });
+    } catch (error) {
+      // Refused before it was sent: the redirect that pointed here answers.
+      if (previous && error instanceof EgressRefusedError) {
+        return { response: previous, redirectTarget: current };
+      }
+      throw error;
+    }
+    const location = REDIRECT_STATUSES.has(response.status) ? response.headers.get("location") : null;
+    if (!location) {
+      return { response, redirectTarget: current !== href ? current : null };
+    }
+    let next: string;
+    try {
+      next = new URL(location, current).href;
+    } catch {
+      return { response, redirectTarget: current !== href ? current : null };
+    }
+    if (!isHttpOrHttpsUrl(next) || looksLikeAnAction(next)) {
+      // Not followed: the link answers with this redirect.
+      response.body?.cancel().catch(() => {});
+      return { response, redirectTarget: next };
+    }
+    response.body?.cancel().catch(() => {});
+    if (hop >= MAX_REDIRECTS) throw new Error("too many redirects");
+    previous = response;
+    current = next;
+  }
 }
 
 async function checkSingleUrlAsync(
@@ -138,32 +234,27 @@ async function checkSingleUrlAsync(
 
   try {
     try {
-      const headResponse = await fetchUndecoded(href, {
-        method: "HEAD",
-        headers: { "User-Agent": options.userAgent, Accept: "*/*" },
-        signal: controller.signal,
-        redirect: "follow",
-      });
+      const head = await requestFollowingSafeRedirects(href, "HEAD", options, controller.signal);
 
-      if (headResponse.status < 400) {
+      if (head.response.status < 400) {
         return {
-          status: headResponse.status,
+          status: head.response.status,
           error: null,
-          redirectTarget: headResponse.url !== href ? headResponse.url : null,
+          redirectTarget: head.redirectTarget,
         };
       }
-    } catch {
+    } catch (error) {
+      // Refused by the egress policy: the GET would be refused too. Not
+      // checked, so unresolved: never broken.
+      if (error instanceof EgressRefusedError) {
+        return { status: null, error: null, redirectTarget: null, refused: true };
+      }
       // HEAD failed, try GET
     }
 
-    const getResponse = await fetchUndecoded(href, {
-      method: "GET",
-      headers: { "User-Agent": options.userAgent, Accept: "*/*" },
-      signal: controller.signal,
-      redirect: "follow",
-    });
-
-    const redirectTarget = getResponse.url !== href ? getResponse.url : null;
+    const get = await requestFollowingSafeRedirects(href, "GET", options, controller.signal);
+    const getResponse = get.response;
+    const redirectTarget = get.redirectTarget;
 
     if (getResponse.status === 403) {
       let body: string | undefined;
@@ -205,6 +296,9 @@ async function checkSingleUrlAsync(
 
     return { status: getResponse.status, error: null, redirectTarget };
   } catch (error) {
+    if (error instanceof EgressRefusedError) {
+      return { status: null, error: null, redirectTarget: null, refused: true };
+    }
     if ((error as Error).name === "AbortError") {
       return { status: null, error: "timeout", redirectTarget: null };
     }
@@ -232,9 +326,22 @@ export function checkExternalLinks(
   return Effect.gen(function* () {
     if (urls.length === 0) return [];
 
-    const uniqueUrls = [...new Set(urls)];
     const results: ExternalCheckResult[] = [];
     let urlsToCheck: string[] = [];
+
+    // repo#2759: never requested, by the bulk checker or locally, and never
+    // answered from an old cached verdict either. The audit leaves these out
+    // before calling (checkCollectedExternalLinks reports them); this holds
+    // for any other caller. They come back unresolved.
+    const uniqueUrls: string[] = [];
+    for (const url of new Set(urls)) {
+      if (looksLikeAnAction(url)) {
+        results.push({ href: url, status: null, error: null, redirectTarget: null, fromCache: false });
+      } else {
+        uniqueUrls.push(url);
+      }
+    }
+    if (uniqueUrls.length === 0) return results;
 
     if (cache) {
       const cachedEntries = cache.getCachedBulk(uniqueUrls, opts.ttlSeconds);
@@ -317,7 +424,8 @@ export function checkExternalLinks(
       // reported as "unverifiable" for a week after the host recovered. Cache
       // the verified results only; throttled ones are re-checked next run.
       const cacheEntries: LinkCacheEntry[] = checkedResults
-        .filter((r) => !isRateLimited(r))
+        // Nor a refused one: nothing was asked.
+        .filter((r) => !isRateLimited(r) && !r.refused)
         .map((r) => ({
           href: r.href,
           status: r.status,

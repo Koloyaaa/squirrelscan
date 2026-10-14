@@ -137,6 +137,8 @@ import {
   RESOURCE_SIZE_LIMITS,
   SQUIRRELSCAN_USER_AGENT,
 } from "@squirrelscan/utils/constants";
+import { maskLinkTokens } from "@squirrelscan/utils/link-actions";
+
 import { checkExternalLinks, type ExternalCheckResult, type LinkCache } from "./external-checker";
 import { checkResourceSizes, type ResourceCheckResult } from "./resource-checker";
 import {
@@ -155,7 +157,11 @@ import {
 import { fetchScriptContents, type ScriptFetchResult } from "./script-fetcher";
 import { isRateLimitStatus } from "@squirrelscan/utils/rate-limit";
 import { isNonPublicHostname } from "@squirrelscan/utils/non-public-host";
-import { memoizeResolveHost, resolveHostAddresses } from "@squirrelscan/utils/public-egress";
+import {
+  type EgressPolicy,
+  memoizeResolveHost,
+  resolveHostAddresses,
+} from "@squirrelscan/utils/public-egress";
 import { getHostname, normalizeUrl } from "@squirrelscan/utils/url";
 import { isInScope } from "@squirrelscan/crawler/frontier";
 import { createRobotsEvaluator } from "@squirrelscan/crawler/robots";
@@ -1746,6 +1752,10 @@ export function runRulesOnStorage(
               .getLinkAppearances(crawlId, link.href)
               .pipe(Effect.catchAll(() => Effect.succeed([])));
         if (!hasBatchLinkMethod) linkQueryCount++;
+        // repo#2759: never requested this audit. A row for one can still be
+        // here, a verdict an earlier engine wrote and an incremental crawl
+        // copied over with the page; it is not this audit's answer.
+        if (isNotRequestedExternalLink(link.href, appearances.map((a) => a.anchorText ?? ""))) continue;
 
         externalLinksData.push({
           href: link.href,
@@ -2526,6 +2536,8 @@ function buildStreamingSiteData(
     for (const link of allLinks) {
       if (!link.isInternal) {
         const appearances = linkAppearancesByHref.get(link.href) ?? [];
+        // repo#2759: never requested this audit; see the v1 builder.
+        if (isNotRequestedExternalLink(link.href, appearances.map((a) => a.anchorText ?? ""))) continue;
 
         externalLinksData.push({
           href: link.href,
@@ -3397,6 +3409,72 @@ function nofollowActionTargets(page: {
   return out;
 }
 
+/** Not-requested external links kept as a sample in the crawl stats, and source pages per link. */
+const NOT_REQUESTED_SAMPLE_LINKS = 50;
+const NOT_REQUESTED_SAMPLE_PAGES = 10;
+
+/**
+ * An external link the checker never requests (repo#2759): its URL looks like
+ * an action or carries a token, or some page's link text is plainly an action
+ * ("Log out", "Unsubscribe", "Delete account"). rel=nofollow does not widen it
+ * here as it does for internal links: on an external link it marks a paid or
+ * untrusted link ("Buy on Amazon", "Follow us"), not an action.
+ */
+export function isNotRequestedExternalLink(href: string, linkTexts: Iterable<string>): boolean {
+  if (looksLikeAnAction(href)) return true;
+  for (const text of linkTexts) if (linkTextLooksLikeAnAction(text, false)) return true;
+  return false;
+}
+
+/**
+ * Split the external links into those the checker may request and those it
+ * never requests ({@link isNotRequestedExternalLink}). The second come back as
+ * a count and a sample, most-linked first, then by URL, each with its first
+ * source pages, how many pages link it, and its URL with token-like values
+ * masked (`maskLinkTokens`, a best effort) for a report that may be published.
+ */
+export function splitNotRequestedExternalLinks(occurrences: ExternalLinkOccurrences): {
+  requestable: ExternalLinkOccurrences;
+  notRequested: {
+    count: number;
+    sample: Array<{ href: string; sourcePages: string[]; pageCount: number }>;
+  };
+} {
+  const requestable: ExternalLinkOccurrences = new Map();
+  const skipped: Array<{ href: string; pages: string[] }> = [];
+  for (const [href, occs] of occurrences) {
+    if (!isNotRequestedExternalLink(href, occs.map((o) => o.text))) {
+      requestable.set(href, occs);
+      continue;
+    }
+    skipped.push({ href, pages: [...new Set(occs.map((o) => o.pageUrl))] });
+  }
+  // Masked first, so links that mask the same (`?u=1`, `?u=2`) are one entry
+  // with their pages merged: a report keys items by id and would drop one.
+  const byMasked = new Map<string, Set<string>>();
+  for (const { href, pages } of skipped) {
+    const masked = maskLinkTokens(href);
+    const merged = byMasked.get(masked) ?? new Set<string>();
+    for (const page of pages) merged.add(page);
+    byMasked.set(masked, merged);
+  }
+  const entries = [...byMasked].map(([href, pages]) => ({ href, pages: [...pages] }));
+  entries.sort(
+    (a, b) => b.pages.length - a.pages.length || (a.href < b.href ? -1 : a.href > b.href ? 1 : 0),
+  );
+  return {
+    requestable,
+    notRequested: {
+      count: skipped.length,
+      sample: entries.slice(0, NOT_REQUESTED_SAMPLE_LINKS).map(({ href, pages }) => ({
+        href,
+        sourcePages: pages.slice(0, NOT_REQUESTED_SAMPLE_PAGES),
+        pageCount: pages.length,
+      })),
+    },
+  };
+}
+
 /**
  * The external links an audit checks under a `max_links` limit (repo#2729):
  * all of them when there is no limit or they fit. Otherwise `priority` first
@@ -3459,6 +3537,8 @@ export function checkCollectedExternalLinks(
   linkCache?: LinkCache | null,
   bulkChecker?: (urls: string[]) => Promise<Map<string, ExternalCheckResult>>,
   priorityHrefs?: readonly string[],
+  /** The transport resolves once and connects to what it validated (the hosted container). */
+  egressPinnedByTransport?: boolean,
 ): Effect.Effect<ExternalCheckResult[], never, never> {
   return Effect.gen(function* () {
     if (!config.enabled) {
@@ -3469,26 +3549,46 @@ export function checkCollectedExternalLinks(
       return [];
     }
 
+    // An external link is the page's to name, so every local request and every
+    // redirect hop it leads to is held to the third-party probes' policy:
+    // public addresses only (private ones too when the audited site is itself
+    // on a private network), never link-local or cloud metadata, and connected
+    // to the address that was vetted. No custom headers ever go with it.
+    const crawl = yield* storage.getCrawl(crawlId).pipe(Effect.catchAll(() => Effect.succeed(null)));
+    const siteHost = getHostname(crawl?.baseUrl ?? "").replace(/^\[|\]$/g, "");
+    const egress: EgressPolicy = {
+      allowPrivateNetwork: siteHost !== "" && isNonPublicHostname(siteHost),
+      resolve: memoizeResolveHost(resolveHostAddresses),
+      pin: egressPinnedByTransport !== true,
+    };
+
     // Check external links using injected cache (or null for no caching)
     const cache = linkCache ?? null;
     const ttlSeconds = config.cache_ttl_days * 24 * 60 * 60;
+
+    // repo#2759: a link that looks like an action or carries a token (a
+    // third-party unsubscribe or magic link, a signed download URL) is never
+    // requested, locally or by the cloud's bulk checker: the URL itself can be
+    // the credential. Same rules as the internal link probe, URL and link text
+    // alike. Counted, sampled, and reported by links/broken-external-links.
+    const { requestable, notRequested } = splitNotRequestedExternalLinks(externalLinkOccurrences);
+    const notRequestedHrefs = [...externalLinkOccurrences.keys()].filter((href) => !requestable.has(href));
 
     // repo#2729: a site can link out to tens of thousands of URLs, and in the
     // cloud each link is a credit, so an audit checks at most `max_links` of
     // them: the most-linked first (nav and footer links every page shares),
     // then by URL so the choice is stable. The rest are counted and reported as
     // not checked.
-    const hrefs = selectExternalLinksToCheck(
-      externalLinkOccurrences,
-      config.max_links,
-      priorityHrefs,
-    );
+    const hrefs = selectExternalLinksToCheck(requestable, config.max_links, priorityHrefs);
     yield* storage
       .updateStats(crawlId, {
         externalLinkCheck: {
           found: externalLinkOccurrences.size,
           checked: hrefs.length,
-          cap: config.max_links ?? externalLinkOccurrences.size,
+          cap: config.max_links ?? requestable.size,
+          ...(notRequested.count > 0
+            ? { notRequested: notRequested.count, notRequestedLinks: notRequested.sample }
+            : {}),
         },
       })
       .pipe(
@@ -3507,6 +3607,7 @@ export function checkCollectedExternalLinks(
       timeoutMs: config.timeout_ms,
       userAgent: SQUIRRELSCAN_USER_AGENT,
       bulkChecker,
+      egress,
     });
 
     // Store results in per-crawl storage
@@ -3534,6 +3635,23 @@ export function checkCollectedExternalLinks(
       for (const occ of occurrences) {
         allAppearances.push({
           href: result.href,
+          pageUrl: occ.pageUrl,
+          anchorText: occ.text,
+          position: occ.position,
+          isNofollow: occ.isNofollow,
+        });
+      }
+    }
+
+    // repo#2759: the links never requested get their appearances too, though
+    // no row. An incremental crawl copies a reused page's link rows, earlier
+    // verdicts included, but not its appearances; with these the rule-data
+    // builders can tell such a row is a link this run never requested by its
+    // link text, not only by its URL, and leave it out.
+    for (const href of notRequestedHrefs) {
+      for (const occ of externalLinkOccurrences.get(href) ?? []) {
+        allAppearances.push({
+          href,
           pageUrl: occ.pageUrl,
           anchorText: occ.text,
           position: occ.position,
