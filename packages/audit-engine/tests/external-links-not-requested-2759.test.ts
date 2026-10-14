@@ -376,13 +376,17 @@ for (const engine of ["v1", "v2"] as const) {
       } as unknown as Config;
       const first = await Effect.runPromise(createCrawler({ config: crawlerConfig }));
       const storage = first.storage;
-      const audit = async (crawler: typeof first) => {
+      const audit = async (
+        crawler: typeof first,
+        afterPreRules?: (crawlId: string) => Promise<void>,
+      ) => {
         const crawlId = await Effect.runPromise(crawler.start(home, home));
         const pre = await Effect.runPromise(
           runStreamingPreRules(storage, crawlId, config, {
             externalLinks: { config: config.external_links, linkCache: null },
           }),
         );
+        await afterPreRules?.(crawlId);
         const ran = await Effect.runPromise(
           Effect.gen(function* () {
             if (engine === "v1") {
@@ -405,16 +409,22 @@ for (const engine of ["v1", "v2"] as const) {
         (await Effect.runPromise(storage.getPages(firstId)))[0]?.normalizedUrl ?? home;
       const stale = `${third}${UNSUBSCRIBE}`;
       const staleByText = `${third}/account`;
+      // pub#770: and a link the check refuses for its address, and one this
+      // run never checks at all: neither may report the old verdict.
+      const staleRefused = "http://169.254.169.254/latest/meta-data/";
+      const staleUnchecked = `${third}/no-longer-linked`;
       for (const [href, anchorText] of [
         [stale, "Manage email"],
         [staleByText, "Log out"],
+        [staleRefused, "Status"],
+        [staleUnchecked, "Old partner"],
       ] as const) {
         await Effect.runPromise(
           storage.upsertLink(firstId, {
             href,
             isInternal: false,
             status: 404,
-            checkedAt: Date.now(),
+            checkedAt: Date.now() - 60_000,
           }),
         );
         await Effect.runPromise(
@@ -426,7 +436,19 @@ for (const engine of ["v1", "v2"] as const) {
 
       requested = [];
       const second = await Effect.runPromise(createCrawler({ config: crawlerConfig, storage }));
-      const { ran } = await audit(second);
+      const { ran } = await audit(second, (crawlId) =>
+        // A row older than this run beside an appearance this run wrote: what
+        // a link refused after its DNS lookup leaves (the check writes its
+        // appearances, never its row). Simulated on a checked link.
+        Effect.runPromise(
+          storage.upsertLink(crawlId, {
+            href: `${third}/partner`,
+            isInternal: false,
+            status: 404,
+            checkedAt: 1,
+          }),
+        ),
+      );
       expect(requested).not.toContain(UNSUBSCRIBE);
       expect(requested).not.toContain("/account");
       const checks = ran.siteRuleResults.get("links/broken-external-links") ?? [];
@@ -434,9 +456,11 @@ for (const engine of ["v1", "v2"] as const) {
       for (const c of checks.filter((c) => c.name === "broken-external-links")) {
         expect(c.items?.map((i) => i.id) ?? []).not.toContain(stale);
         expect(c.items?.map((i) => i.id) ?? []).not.toContain(staleByText);
+        expect(c.items?.map((i) => i.id) ?? []).not.toContain(staleRefused);
+        expect(c.items?.map((i) => i.id) ?? []).not.toContain(staleUnchecked);
       }
       const dead = ran.siteRuleResults.get("links/dead-links") ?? [];
-      expect(dead.map((c) => c.message)).toEqual(["Checked 3 external link(s); none are dead"]);
+      expect(dead.map((c) => c.message)).toEqual(["Checked 2 external link(s); none are dead"]);
     });
   });
 }

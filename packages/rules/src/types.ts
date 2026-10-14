@@ -490,6 +490,11 @@ export interface SiteData {
     cap: number;
     notRequested?: number;
     notRequestedLinks?: Array<{ href: string; sourcePages: string[]; pageCount?: number }>;
+    /** pub#770: links never requested because the egress policy refuses their address. */
+    refused?: number;
+    /** Of those, the ones refused on the URL alone, before any were selected under the limit. */
+    refusedByUrl?: number;
+    refusedLinks?: Array<{ href: string; sourcePages: string[]; pageCount?: number }>;
   };
   /**
    * Status of internal link targets the crawl did not fetch, from the link
