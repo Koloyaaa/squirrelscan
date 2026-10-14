@@ -37,6 +37,10 @@ import {
   type ParsedPageCache,
 } from "@squirrelscan/parser";
 import { type RunnerScope } from "@squirrelscan/rules";
+import {
+  memoizeResolveHost,
+  resolveHostAddresses,
+} from "@squirrelscan/utils/public-egress";
 import { Duration, Effect, Stream } from "effect";
 
 import type { Config } from "@/config";
@@ -632,6 +636,25 @@ export function fetchResourceAssets(
 
     const maxResources = overrides?.resourceCheckMaxItems;
     const resourceCheckOptions = {
+      // squirrelscan/repo#2764: the site's own stylesheets, images, PDFs and
+      // sitemap URLs may not reach a link-local or cloud metadata address
+      // (private networks are fine). The crawl's own host is sent as the
+      // crawl sends it; every other hop, subdomains included, is vetted, as in
+      // the engine's asset phase. Scripts here go through the CLI's own script
+      // fetcher, which follows redirects natively: #768.
+      egress: {
+        allowPrivateNetwork: true,
+        resolve: memoizeResolveHost(resolveHostAddresses),
+        trustTarget: (url: URL) => {
+          try {
+            return (
+              url.host.toLowerCase() === new URL(baseUrl).host.toLowerCase()
+            );
+          } catch {
+            return false;
+          }
+        },
+      },
       concurrency:
         config.external_links?.concurrency ??
         RESOURCE_SIZE_LIMITS.CHECK_CONCURRENCY,

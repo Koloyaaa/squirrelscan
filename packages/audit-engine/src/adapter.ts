@@ -1026,6 +1026,43 @@ export function fetchAssetsFromOccurrences(
           })
         : undefined;
 
+    // repo#2764: the site's own assets may not reach a link-local or cloud
+    // metadata address. An open redirect on the site
+    // (`/go?u=http://169.254.169.254/`), or a subdomain pointed at one, used
+    // as a stylesheet, script, image or sitemap URL would otherwise send the
+    // auditor's machine there. The hosts the crawl itself requests are sent
+    // as it sends them; every other hop, subdomains included, is vetted
+    // (private networks allowed: a LAN or dev-server audit) and connects to
+    // the address it was vetted on.
+    const resolveOnce = memoizeResolveHost(resolveHostAddresses);
+    const ownSiteHost = getHostname(baseUrl).toLowerCase();
+    // The crawl's own host scope: the base host, its www/apex pair and
+    // `project.domains`. These are requested as the crawl requests them.
+    const inCrawlHostScope = (url: string): boolean => {
+      if (!baseUrl) return false;
+      try {
+        return isInScope(url, {
+          baseUrl,
+          include: [],
+          exclude: [],
+          allowedDomains: config.project?.domains ?? [],
+        }).allowed;
+      } catch {
+        return false;
+      }
+    };
+    // The site's own for headers and pools: that scope plus subdomains. A
+    // subdomain is still vetted: the crawl never requests it, and its name can
+    // point anywhere (`imds.example.com A 169.254.169.254`).
+    const isOwnSiteUrl = (url: string): boolean =>
+      isSameDomainResource(url, ownSiteHost) || inCrawlHostScope(url);
+    const ownSiteEgress: EgressPolicy = {
+      allowPrivateNetwork: true,
+      resolve: resolveOnce,
+      pin: overrides?.egressPinnedByTransport !== true,
+      trustTarget: (url) => inCrawlHostScope(url.href),
+    };
+
     const resourceCheckOptions = {
       concurrency: config.external_links?.concurrency ?? RESOURCE_SIZE_LIMITS.CHECK_CONCURRENCY,
       timeoutMs:
@@ -1038,11 +1075,14 @@ export function fetchAssetsFromOccurrences(
         ? { maxStalenessSeconds: config.crawler.max_staleness_seconds }
         : {}),
       ...(maxResources != null ? { maxResources } : {}),
-      // Web Bot Auth / custom headers apply to asset fetches too (#494).
+      // Web Bot Auth / custom headers apply to asset fetches too (#494). Only
+      // the site's own: every pool on these options is same-site, and the
+      // sitemap pool sends a URL on another host without them (below).
       ...(config.crawler?.headers && Object.keys(config.crawler.headers).length > 0
         ? { customHeaders: config.crawler.headers }
         : {}),
       ...(fetchBudget ? { budget: fetchBudget } : {}),
+      egress: ownSiteEgress,
     };
 
     const scriptFetchOptions: Parameters<typeof fetchScriptContents>[1] = {
@@ -1055,6 +1095,7 @@ export function fetchAssetsFromOccurrences(
         ? { customHeaders: config.crawler.headers }
         : {}),
       ...(fetchBudget ? { budget: fetchBudget } : {}),
+      egress: ownSiteEgress,
     };
 
     const sitemapStatusLimit = Math.min(
@@ -1159,15 +1200,29 @@ export function fetchAssetsFromOccurrences(
     } catch {
       // An unparseable base URL grants no private exception.
     }
+    const thirdPartyEgress: EgressPolicy = {
+      allowPrivateNetwork: baseHost !== "" && isNonPublicHostname(baseHost),
+      resolve: resolveOnce,
+      pin: overrides?.egressPinnedByTransport !== true,
+    };
     const externalCheckOptions = {
       ...probeShared,
       statusOnly: true,
-      egress: {
-        allowPrivateNetwork: baseHost !== "" && isNonPublicHostname(baseHost),
-        resolve: memoizeResolveHost(resolveHostAddresses),
-        pin: overrides?.egressPinnedByTransport !== true,
-      },
+      egress: thirdPartyEgress,
     };
+
+    // repo#2764: a sitemap may list URLs on any host. The ones outside the
+    // audited host and its subdomains are checked as the third-party probes
+    // are: none of the audit's custom headers (Web Bot Auth signatures,
+    // Authorization, cookies), no prior-crawl cache, public addresses only.
+    // One cap for the pool as a whole: each half would otherwise get the
+    // checker's own default cap.
+    const sitemapTargets = orphanCandidates.slice(
+      0,
+      Math.min(sitemapStatusLimit, maxResources ?? RESOURCE_SIZE_LIMITS.MAX_RESOURCES_TO_CHECK),
+    );
+    const ownSitemapTargets = sitemapTargets.filter((url) => isOwnSiteUrl(url));
+    const foreignSitemapTargets = sitemapTargets.filter((url) => !isOwnSiteUrl(url));
 
     const resourceCheckStart = Date.now();
 
@@ -1224,13 +1279,22 @@ export function fetchAssetsFromOccurrences(
               allowPrivateTarget: (url) => siteOrigin !== "" && url.origin === siteOrigin,
               allowHost: (host) =>
                 baseHost !== "" && (host === baseHost || host.endsWith(`.${baseHost}`)),
-              resolve: memoizeResolveHost(resolveHostAddresses),
+              resolve: resolveOnce,
               pin: overrides?.egressPinnedByTransport !== true,
             })
           : Effect.succeed(null as FetchedWebAppManifests | null),
-        sitemap: checkResourceSizes(
-          orphanCandidates.slice(0, sitemapStatusLimit),
-          resourceCheckOptions,
+        sitemap: Effect.all([
+          checkResourceSizes(ownSitemapTargets, resourceCheckOptions),
+          checkResourceSizes(foreignSitemapTargets, { ...probeShared, egress: thirdPartyEgress }),
+        ]).pipe(
+          // Back in the sitemap's order, as one pool.
+          Effect.map(([own, foreign]) => {
+            const byUrl = new Map([...own, ...foreign].map((r) => [r.url, r]));
+            return sitemapTargets.flatMap((url) => {
+              const result = byUrl.get(url);
+              return result ? [result] : [];
+            });
+          }),
         ),
         // Status only, and safe by construction (link-target-probe.ts): HEAD,
         // GET only on 405/501, no credentials or custom headers, every
