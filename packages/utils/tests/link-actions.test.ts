@@ -4,7 +4,13 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { linkTextLooksLikeAnAction, looksLikeAnAction, maskLinkTokens } from "../src/link-actions";
+import {
+  CREDENTIAL_PARAM_NAMES,
+  isCredentialParam,
+  linkTextLooksLikeAnAction,
+  looksLikeAnAction,
+  maskLinkTokens,
+} from "../src/link-actions";
 
 describe("maskLinkTokens", () => {
   test("every query value and token-like path segment is masked; the rest of the URL stays", () => {
@@ -74,4 +80,156 @@ describe("the rules moved here unchanged", () => {
     expect(linkTextLooksLikeAnAction("Log out", false)).toBe(true);
     expect(linkTextLooksLikeAnAction("Buy on Amazon", false)).toBe(false);
   });
+});
+
+describe("a sign-out written as several words (#774)", () => {
+  test("a server-script extension is not a word, and the sign-out pairs reach five", () => {
+    for (const path of [
+      "/MyAccountLogOut.aspx",
+      "/my-account-log-out-now",
+      "/my-account-log-out-now.aspx",
+      "/account/my-account-log-out-now.php",
+      "/PortalMyAccountLogOut.do",
+      "/UserSignOut",
+      "/delete-your-account.php",
+      "/my-password.php",
+    ]) {
+      expect(looksLikeAnAction(`https://x.test${path}`)).toBe(true);
+    }
+  });
+
+  test("a longer slug or name that mentions one, and look-alike names, are pages", () => {
+    for (const path of [
+      "/blog/how-to-log-out-of-every-device",
+      "/blog/HowToLogOutOfEveryDevice",
+      "/blog/how-to-log-out-of-every-device.html",
+      "/HowToAddToHomeScreen",
+      "/blog/a-perfect-sign-off-email",
+      "/BlogOutreachTips",
+      "/DesignOfficeIdeas",
+      "/SignOffice",
+      "/LogOutdoor",
+      "/catalog-outlet",
+      "/where-to-buy.html",
+      "/blog/how-to-verify.html",
+      "/guides/remove-stains.pdf",
+    ]) {
+      expect(looksLikeAnAction(`https://x.test${path}`)).toBe(false);
+    }
+  });
+});
+
+describe("credential query parameters (#774)", () => {
+  test("the names from the issue, which main requested, are never requested", () => {
+    for (const name of [
+      "api_key",
+      "x-api-key",
+      "pwd",
+      "session_id",
+      "accesstoken",
+      "authorization",
+      "jwt",
+      "x-amz-credential",
+      "x-goog-credential",
+    ]) {
+      expect(CREDENTIAL_PARAM_NAMES).toContain(name);
+      expect(looksLikeAnAction(`https://x.test/page?${name}=abc`)).toBe(true);
+    }
+    expect(looksLikeAnAction("https://cdn.test/a.zip?X-Amz-Credential=AKIA%2F20260916")).toBe(true);
+  });
+
+  test("every name on the list counts, in any case, with its separators changed, or in brackets", () => {
+    for (const name of CREDENTIAL_PARAM_NAMES) {
+      expect(looksLikeAnAction(`https://x.test/page?${name.toUpperCase()}=abc`)).toBe(true);
+    }
+    for (const key of [
+      "x_api_key",
+      "X-Api-Key",
+      "session-id",
+      "api_key[]",
+      "pwd[]",
+      "config[api_key]",
+      "user[pwd]",
+      "api_key[0]",
+      "jwt[1]",
+    ]) {
+      expect(isCredentialParam(key)).toBe(true);
+      expect(looksLikeAnAction(`https://x.test/page?${encodeURIComponent(key)}=abc`)).toBe(true);
+    }
+  });
+
+  test("a JWT value counts whatever the parameter is called; ordinary parameters do not", () => {
+    const jwt = "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2Q";
+    expect(isCredentialParam("gift", jwt)).toBe(true);
+    expect(isCredentialParam("page", "2")).toBe(false);
+    expect(isCredentialParam("user[name]")).toBe(false);
+    expect(looksLikeAnAction("https://x.test/search?q=api+key&page=2")).toBe(false);
+  });
+});
+
+describe("an email address in a path segment is masked (#774)", () => {
+  test("plain, encoded and with a plus sign; a handle stays", () => {
+    expect(maskLinkTokens("https://m.example/unsubscribe/user@example.com/77b1")).toBe(
+      "https://m.example/unsubscribe/…/77b1",
+    );
+    expect(maskLinkTokens("https://m.example/u/user%40example.com")).toBe("https://m.example/u/…");
+    expect(maskLinkTokens("https://m.example/u/user+tag@example.co.uk/")).toBe("https://m.example/u/…/");
+    expect(maskLinkTokens("https://m.example/prefs;email=user@example.com")).toBe("https://m.example/…");
+    expect(maskLinkTokens("https://m.example/subscribers/user@example.com.json")).toBe(
+      "https://m.example/subscribers/…",
+    );
+    expect(maskLinkTokens("https://m.example/u/(user@example.com)")).toBe("https://m.example/u/…");
+    expect(maskLinkTokens("https://m.example/u/user@m%C3%BCnchen.de")).toBe("https://m.example/u/…");
+    expect(maskLinkTokens("https://medium.example/@writer/a-post")).toBe(
+      "https://medium.example/@writer/a-post",
+    );
+  });
+
+  test("an asset name with an @ in it is not an address", () => {
+    for (const path of [
+      "/img/logo@2x.png",
+      "/img/icon@3x.webp",
+      "/img/photo@large.jpg",
+      "/fonts/font@latin.woff2",
+      "/img/hero@1.5x.png",
+      "/@user.name",
+      "/v1/repos/a@b.c/x",
+    ]) {
+      expect(maskLinkTokens(`https://cdn.example${path}`)).toBe(`https://cdn.example${path}`);
+    }
+  });
+});
+
+describe("adversarial keys and paths stay linear (#778)", () => {
+  // An anchored bracket pattern backtracked quadratically on a long run of
+  // `[]` or `[\`: 40,000 characters took over two seconds. A linear pass over
+  // 200,000 takes a few milliseconds, so the bounds below leave room for a
+  // loaded machine and still fail long before a quadratic pass would finish.
+  const timed = (run: () => unknown) => {
+    const started = performance.now();
+    run();
+    return performance.now() - started;
+  };
+  const shapes = ["[]", "[\\", "[0]", "[", "]", "[a", "a@", "a."];
+
+  for (const shape of shapes) {
+    test(`a key or path of repeated ${JSON.stringify(shape)} at n, 2n and 4n`, () => {
+      const times = [25_000, 50_000, 100_000].map((count) => {
+        // A trailing character that ends no match, as an attacker's key would.
+        const text = `${shape.repeat(count)}x`;
+        const query = `https://x.test/p?${encodeURIComponent(text)}=1`;
+        const path = `https://x.test/${encodeURIComponent(text)}`;
+        return timed(() => {
+          isCredentialParam(text);
+          looksLikeAnAction(query);
+          looksLikeAnAction(path);
+          maskLinkTokens(query);
+          maskLinkTokens(path);
+        });
+      });
+      expect(times[0]!).toBeLessThan(500);
+      expect(times[1]!).toBeLessThan(1_000);
+      expect(times[2]!).toBeLessThan(2_000);
+    });
+  }
 });
