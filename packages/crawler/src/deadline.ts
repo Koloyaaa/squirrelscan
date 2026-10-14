@@ -19,6 +19,13 @@ import type { RefusalLog } from "./refusals";
  *
  * `use` must finish with the response (read or cancel its body) before it
  * returns — the deadline is disarmed as soon as it does.
+ *
+ * The request is then aborted (#766). Cancelling a body does not close Bun's
+ * connection: it goes on downloading whatever the origin sends until the
+ * request's signal aborts, and with the deadline disarmed nothing else would
+ * abort it, so a capped read of an endless body held the socket open, and kept
+ * receiving, for as long as the origin kept sending. Aborting a request whose
+ * body was read to the end is a no-op; the connection stays pooled.
  */
 export async function withRequestDeadline<T>(
   timeoutMs: number,
@@ -31,6 +38,7 @@ export async function withRequestDeadline<T>(
     return await use(await perform(controller.signal));
   } finally {
     clearTimeout(timeout);
+    controller.abort();
   }
 }
 

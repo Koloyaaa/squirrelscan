@@ -3,7 +3,7 @@
 // share disarmed the abort the moment the headers landed, so an origin that
 // answered 200 and then stalled its body hung the caller forever.
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 
 import { safeFetchWithDeadline, withRequestDeadline } from "../src/deadline";
 
@@ -54,12 +54,13 @@ describe("withRequestDeadline (#1699)", () => {
     }
   });
 
-  test("a normal response is read in full and the deadline is disarmed", async () => {
+  test("a normal response is read in full, and the request is released only once `use` returns", async () => {
     const server = Bun.serve({
       port: 0,
       fetch: () => new Response("hello", { headers: { "content-type": "text/plain" } }),
     });
     let signal: AbortSignal | undefined;
+    let abortedWhileReading: boolean | undefined;
     try {
       const body = await withRequestDeadline(
         DEADLINE_MS,
@@ -67,16 +68,40 @@ describe("withRequestDeadline (#1699)", () => {
           signal = s;
           return fetch(`http://localhost:${server.port}/`, { signal: s });
         },
-        (response) => response.text(),
+        async (response) => {
+          const text = await response.text();
+          abortedWhileReading = signal?.aborted;
+          return text;
+        },
       );
       expect(body).toBe("hello");
-
-      // Wait out the deadline. Still un-aborted ⇒ the timer was cleared;
-      // without the clearTimeout this flips to true here.
-      await Bun.sleep(DEADLINE_MS * 2);
-      expect(signal?.aborted).toBe(false);
+      expect(abortedWhileReading).toBe(false);
+      // Released (#766): aborting is what closes a connection whose body was
+      // not read to the end; for this one it is a no-op.
+      expect(signal?.aborted).toBe(true);
     } finally {
       server.stop(true);
+    }
+  });
+
+  test("the deadline timer is cleared once `use` returns", async () => {
+    // The release abort makes a late timer harmless to the request, but a
+    // pending timer still holds the process open until it fires.
+    const armed = spyOn(globalThis, "setTimeout");
+    const cleared = spyOn(globalThis, "clearTimeout");
+    try {
+      await withRequestDeadline(
+        DEADLINE_MS,
+        async () => new Response("hello"),
+        (response) => response.text(),
+      );
+      const call = armed.mock.calls.findIndex((args) => args[1] === DEADLINE_MS);
+      expect(call).toBeGreaterThanOrEqual(0);
+      const timer = armed.mock.results[call]?.value;
+      expect(cleared).toHaveBeenCalledWith(timer);
+    } finally {
+      armed.mockRestore();
+      cleared.mockRestore();
     }
   });
 
