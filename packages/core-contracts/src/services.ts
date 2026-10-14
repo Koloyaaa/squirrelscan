@@ -102,6 +102,19 @@ export interface DeadLinkResult {
    * Optional so older service responses keep parsing.
    */
   rateLimited?: boolean;
+  /**
+   * The checker could not verify the link either way (squirrelscan/repo#2818):
+   * bot protection refused it, it timed out or failed to connect from the
+   * checker's network, or it is a first 404 still waiting for its confirming
+   * check. Never a broken link: the rules list it with the WAF-blocked links
+   * as "status unverifiable". `status` and `redirectUrl` are then null, a
+   * refused 403 included, so a client that predates this field reads the link
+   * as unchecked rather than broken. Optional so older service responses keep
+   * parsing.
+   */
+  wafBlocked?: boolean;
+  /** The bot-protection vendor when the checker named one (`cloudflare`, `akamai`, ...), else `unknown`. */
+  wafProvider?: string;
 }
 
 export interface DeadLinksResponse {
