@@ -24,12 +24,15 @@
 // mutation `mutation{__typename}` (GET only), which names no schema field and
 // cannot write. Requests carry no cookies, do not follow redirects, are bounded
 // by the shared probe budget and a per-request timeout, and read at most a
-// fixed number of response bytes.
+// fixed number of response bytes. Responses arrive with the runtime's body
+// decoding off and are decoded only as far as that cap (#722), so a site
+// cannot answer a probe with a compression bomb.
 //
 // Rules ask `ctx.probe.allows(...)` through `sendGraphqlProbe`, which also
 // records the request, so a passive run or an absent `ctx.probe` sends nothing.
 
 import { SQUIRRELSCAN_USER_AGENT } from "@squirrelscan/utils/constants";
+import { decodedBody, fetchUndecoded } from "@squirrelscan/utils/response-body";
 import { isRobotsTxtDisallowed } from "@squirrelscan/utils/robots-txt";
 
 import type { EndpointCandidate } from "../endpoint-surface";
@@ -51,7 +54,7 @@ export const INTROSPECTION_QUERY = "{__schema{types{name}}}";
 /** The no-op mutation: selects only `__typename`, so no resolver runs and nothing is written. */
 export const NOOP_MUTATION = "mutation{__typename}";
 
-/** Response bytes read for each operation. A longer body is not parsed. */
+/** Decoded response bytes read for each operation. A longer body is not parsed. */
 export const GRAPHQL_RESPONSE_CAPS = {
   introspection: 1024 * 1024,
   "noop-mutation": 64 * 1024,
@@ -258,7 +261,7 @@ export interface GraphqlProbeResponse {
   contentType: string;
   /** The body as text, at most the operation's byte cap. */
   body: string;
-  /** True when the body was longer than the cap; `body` is then a prefix. */
+  /** True when the decoded body was longer than the cap; `body` is then a prefix. */
   truncated: boolean;
 }
 
@@ -300,12 +303,16 @@ export function buildGraphqlProbe(
 
 // The per-chunk cap is the guard; `content-length` is not trusted. A stalled
 // body is bounded by the request signal, which also aborts `reader.read()`.
+// The cap applies to the DECODED body: `decodedBody` undoes the response's
+// Content-Encoding lazily, so a compressed answer is inflated no further than
+// the cap (#722). A body that does not decode fails the read and so the probe.
 async function readCapped(
   res: Response,
   maxBytes: number
 ): Promise<{ text: string; truncated: boolean }> {
-  if (!res.body) return { text: "", truncated: false };
-  const reader = res.body.getReader();
+  const body = decodedBody(res);
+  if (!body) return { text: "", truncated: false };
+  const reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
   let truncated = false;
@@ -327,7 +334,8 @@ async function readCapped(
       total += value.byteLength;
     }
   } finally {
-    // Release the connection on a cap, an abort or a read error alike.
+    // Release the reader on a cap, an abort or a read error alike. This does
+    // not close the connection: `sendGraphqlProbe` aborts the request for that.
     if (!finished) await reader.cancel().catch(() => {});
   }
   const buf = new Uint8Array(total);
@@ -352,11 +360,22 @@ export async function sendGraphqlProbe(
   const kind = request.method === "GET" ? "quiet" : "loud";
   if (!probe || !probe.allows(kind)) return { sent: false, reason: "not-allowed" };
   const { url, init } = buildGraphqlProbe(endpointUrl, request);
-  const signal = AbortSignal.any([probe.signal(), AbortSignal.timeout(GRAPHQL_PROBE_TIMEOUT_MS)]);
+  // Aborted once the probe is done: cancelling a body does not close the
+  // connection in Bun, which keeps downloading the rest until the request's
+  // signal fires, so without this a capped read still pulled up to the
+  // timeout's worth of an endless answer off the wire.
+  const done = new AbortController();
+  const signal = AbortSignal.any([
+    probe.signal(),
+    AbortSignal.timeout(GRAPHQL_PROBE_TIMEOUT_MS),
+    done.signal,
+  ]);
   // Counted before the request leaves, so a request that fails still uses budget.
   probe.record();
   try {
-    const res = await globalThis.fetch(url, { ...init, signal });
+    // Never `fetch` itself: Bun inflates a Content-Encoding body in full as it
+    // arrives, before any capped read (#722, as #2717 was for the crawl).
+    const res = await fetchUndecoded(url, { ...init, signal });
     const { text, truncated } = await readCapped(res, GRAPHQL_RESPONSE_CAPS[request.op]);
     return {
       sent: true,
@@ -369,6 +388,8 @@ export async function sendGraphqlProbe(
     };
   } catch (err) {
     return { sent: true, error: err instanceof Error ? err.name || err.message : String(err) };
+  } finally {
+    done.abort();
   }
 }
 
