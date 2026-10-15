@@ -1618,6 +1618,16 @@ export function buildHeadersMap(page: PageRecord): Record<string, string> {
   return headers;
 }
 
+/**
+ * Where the crawl started: where its seed's redirects resolved and the URL it
+ * was given (#788). Both engine paths hand this to the hidden-page checks.
+ */
+function crawlEntryUrls(
+  crawl: { seedUrl?: string; originalUrl?: string } | null | undefined,
+): string[] {
+  return [crawl?.seedUrl, crawl?.originalUrl].filter((url): url is string => !!url);
+}
+
 export function runRulesOnStorage(
   storage: CrawlStorage,
   crawlId: string,
@@ -1945,6 +1955,7 @@ export function runRulesOnStorage(
         config.integrity?.cloaking_probe,
         {
           baseUrl: crawl?.baseUrl ?? "",
+          entryUrls: crawlEntryUrls(crawl),
           pages: parsedPages.map((p) => ({
             url: p.url,
             statusCode: p.statusCode,
@@ -2007,6 +2018,7 @@ export function runRulesOnStorage(
         crawl?.seedUrl,
         crawl?.originalUrl,
       ]),
+      entryUrls: crawlEntryUrls(crawl),
       robotsTxt: robotsData,
       // What the site refused, so a rule says "refused" not "absent".
       refusedFetches: crawl?.stats?.refusedFetches,
@@ -2720,6 +2732,7 @@ function buildStreamingSiteData(
         config.integrity?.cloaking_probe,
         {
           baseUrl: crawl?.baseUrl ?? "",
+          entryUrls: crawlEntryUrls(crawl),
           pages: parsedPages.map((p) => ({
             url: p.url,
             statusCode: p.statusCode,
@@ -2766,6 +2779,7 @@ function buildStreamingSiteData(
         crawl?.seedUrl,
         crawl?.originalUrl,
       ]),
+      entryUrls: crawlEntryUrls(crawl),
       robotsTxt: robotsData,
       // What the site refused, so a rule says "refused" not "absent".
       refusedFetches: crawl?.stats?.refusedFetches,
