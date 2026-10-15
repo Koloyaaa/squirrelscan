@@ -20,7 +20,7 @@ How it works:
 ### Changed
 
 - `links/broken-links` says where on the page a broken internal link sits (the footer, the navigation, the comments, the page content), from landmarks and comment-thread markup. Each item also carries `meta.sections` counts.
-- Where the markup says nothing, a small page classifier bundled with squirrel (about 9 MB, no network call) names the part of the page: the header, footer, navigation, sidebar or page content, and sections such as the pagination, breadcrumbs, a related-content block, the business details, the social sharing links, the account and login links, the author byline and the newsletter signup. Markup always wins and comment threads stay markup-only. Each page also stores the classifier's page type. `squirrel self doctor` shows the artifact and its load time.
+- Where the markup says nothing, a small page classifier bundled with squirrel (about 9 MB, no network call) names the part of the page: the header, footer, navigation, sidebar or page content, and sections such as the pagination, breadcrumbs, a related-content block, the business details, the social sharing links, the account and login links, the author byline and the newsletter signup. Markup always wins and comment threads stay markup-only. Each page also stores the classifier's page type. `squirrel self doctor` shows the artifact and its load time. Switch it off with `--no-classifier` or `[classifier] enabled = false` and link sections come from markup alone.
 
 ### Fixed
 
