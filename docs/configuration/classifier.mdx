@@ -40,6 +40,17 @@ For one run, `--no-classifier` does the same:
 squirrel audit https://example.com --no-classifier
 ```
 
+## Known limitations
+
+The classifier is a model, and models guess. It answers only when it is confident, but these mistakes happen:
+
+- On a single article, the previous and next post links can read as pagination.
+- A "follow us" row of profile icons can read as social sharing links.
+- The comments label comes from page markup only. A comment thread built with unusual class names or ids is not recognised, and the model never names one.
+- On pages with good markup it rarely speaks, because the markup has already answered.
+
+A wrong phrase never hides a broken link. It only changes the words that say where the link sits.
+
 ## Check that it loads
 
 `squirrel self doctor` reports the bundled artifact, the featurizer version it was built for and how long it took to load:
