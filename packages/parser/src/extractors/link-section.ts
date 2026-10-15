@@ -188,9 +188,14 @@ export function mergeLinkSection(
   return { section: markup };
 }
 
+// Confidence is stored on every model-named link, so three decimals: enough to read, short to keep.
 function answer(section: LinkSection, from: PlacedLabel): ResolvedLinkSection {
   return from.source === "model"
-    ? { section, sectionSource: "model", sectionConfidence: from.confidence }
+    ? {
+        section,
+        sectionSource: "model",
+        sectionConfidence: Math.round(from.confidence * 1000) / 1000,
+      }
     : { section };
 }
 

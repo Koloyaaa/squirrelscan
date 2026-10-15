@@ -40,7 +40,7 @@ export function createPageClassifierHook(
       classification: {
         pageType: {
           label: result.pageType.label,
-          confidence: result.pageType.confidence,
+          confidence: Math.round(result.pageType.confidence * 1000) / 1000,
           source: result.pageType.source,
         },
         degraded: result.degraded,
