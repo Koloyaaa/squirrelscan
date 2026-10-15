@@ -23,6 +23,8 @@ An accessible name comes from the link's text content, an `alt` on an image insi
 
 Severity warning, weight 4.
 
+When the page's links carry a link section (see [Page Classifier](/configuration/classifier)), each item says where its links sit and carries the counts in `meta.sections`: an empty anchor reads `https://example.com/pricing, linked in the footer`, and a generic anchor text reads `"Read more", linked in the page content and the navigation`, counting every link that uses it. A crawl whose links carry no section keeps the item as it was.
+
 ## How to fix it
 
 ```html

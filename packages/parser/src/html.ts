@@ -198,12 +198,13 @@ export function extractLinks(doc: Document, baseUrl: string, placeLink?: LinkPla
 
       links.push({ url, text, isInternal, isChrome, ...sectionOf(anchor as Element) });
     } catch {
-      // Skip invalid URLs
+      // Skip invalid URLs. Still placed: `links/invalid-links` says where the bad link sits.
       links.push({
         url: href.trim(),
         text: (anchor as Element).textContent?.trim() ?? "",
         isInternal: false,
         error: "Invalid URL format",
+        ...sectionOf(anchor as Element),
       });
     }
   }
@@ -213,7 +214,7 @@ export function extractLinks(doc: Document, baseUrl: string, placeLink?: LinkPla
 
 // Cap on carried contact anchors — a footer repeating one number does not need
 // an unbounded array on every parsed page.
-const MAX_CONTACT_LINKS = 32;
+export const MAX_CONTACT_LINKS = 32;
 
 /**
  * `tel:` / `mailto:` anchors, which `extractLinks` deliberately drops: they are
@@ -226,12 +227,19 @@ const MAX_CONTACT_LINKS = 32;
  * addresses in the text) Cloudflare's email obfuscation rewrote. Each is
  * carried as the `mailto:` it stands for, flagged `obfuscated`.
  */
-export function extractContactLinks(doc: Document): ContactLinkData[] {
+export function extractContactLinks(doc: Document, placeLink?: LinkPlacer): ContactLinkData[] {
   const contacts: ContactLinkData[] = [];
   // Obfuscated addresses get a cap of their own, so a footer of them cannot
   // push out the `tel:` links local/nap-consistency compares.
   let plain = 0;
   let obfuscated = 0;
+  const sectionOf = makeLinkSectionResolver(placeLink);
+  // Where the anchor sat (#2307), for `links/tel-mailto` findings. Left off when the answer is
+  // `unknown`: an anchor outside every landmark carries nothing worth storing.
+  const placedOf = (anchor: Element) => {
+    const placed = sectionOf(anchor);
+    return placed.section !== "unknown" ? placed : {};
+  };
 
   for (const anchor of doc.querySelectorAll(
     'a[href^="tel:" i], a[href^="mailto:" i], a[href*="/cdn-cgi/l/email-protection" i]',
@@ -244,7 +252,7 @@ export function extractContactLinks(doc: Document): ContactLinkData[] {
     if (isCloudflareEmailProtectionUrl(trimmed)) {
       if (obfuscated >= MAX_CONTACT_LINKS) continue;
       obfuscated++;
-      contacts.push(cloudflareEmailContact(anchor as Element, trimmed));
+      contacts.push({ ...cloudflareEmailContact(anchor as Element, trimmed), ...placedOf(anchor as Element) });
       continue;
     }
     if (plain >= MAX_CONTACT_LINKS) continue;
@@ -258,6 +266,7 @@ export function extractContactLinks(doc: Document): ContactLinkData[] {
       // `?subject=…` / `;phone-context=…` are routing params, not the address.
       value: trimmed.slice(colon + 1).split(/[?;]/)[0] ?? "",
       text: (anchor as Element).textContent?.trim() ?? "",
+      ...placedOf(anchor as Element),
     });
   }
 
@@ -512,7 +521,7 @@ export function parsePage(html: string, url: string, options?: ParsePageOptions)
     og: extractOG(doc),
     twitter: extractTwitter(doc),
     links: extractLinks(doc, url, classified?.placeLink),
-    contactLinks: extractContactLinks(doc),
+    contactLinks: extractContactLinks(doc, classified?.placeLink),
     images: extractImages(doc, url),
     headings: extractHeadings(doc),
     content: extractContent(doc, html),

@@ -247,7 +247,7 @@ export function parsePageRecord(
         // This is the THIRD ParsedPage producer (see @squirrelscan/parser's
         // `parsePage` and audit-engine's `parseHtmlForRules`); a field set on
         // only some of them is undefined at runtime with every test still green.
-        contactLinks: extractContactLinks(doc),
+        contactLinks: extractContactLinks(doc, classified?.placeLink),
         images: images.map((i) => ({
           src: i.src,
           alt: i.alt,

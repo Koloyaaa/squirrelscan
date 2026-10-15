@@ -10,6 +10,7 @@ export {
   extractTwitter,
   extractLinks as extractLinksBasic,
   extractContactLinks,
+  MAX_CONTACT_LINKS,
   extractImages,
   extractSchema,
   extractHeadings,

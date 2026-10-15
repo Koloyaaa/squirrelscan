@@ -421,7 +421,7 @@ export function parseHtmlForRules(
     // tel:/mailto: anchors, which `extractLinks` drops as non-crawlable. This is
     // the parse path production actually runs (parsePageRecord + the #263 page-rule
     // workers), so a field populated only by `parsePage` would be invisible live.
-    contactLinks: extractContactLinks(doc),
+    contactLinks: extractContactLinks(doc, classified?.placeLink),
     images: images.map((i) => ({
       src: i.src,
       alt: i.alt,
