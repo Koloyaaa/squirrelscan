@@ -1,6 +1,6 @@
 // Where on its source pages a link sat, for finding labels (#2307).
 
-import type { LinkSection } from "@squirrelscan/core-contracts";
+import type { LinkSection, LinkSectionCounts } from "@squirrelscan/core-contracts";
 
 /**
  * How an item reads: "in the footer", "in the page content", "in the pagination", ... The first
@@ -24,7 +24,7 @@ const PHRASE: Record<Exclude<LinkSection, "unknown">, string> = {
   newsletter_signup: "the newsletter signup",
 };
 
-export type SectionCounts = Partial<Record<Exclude<LinkSection, "unknown">, number>>;
+export type SectionCounts = LinkSectionCounts;
 
 /** Add one link's section to the counts; unknown and missing add nothing. */
 export function countSection(counts: SectionCounts, section: LinkSection | undefined): void {
@@ -32,12 +32,24 @@ export function countSection(counts: SectionCounts, section: LinkSection | undef
   counts[section] = (counts[section] ?? 0) + 1;
 }
 
-/** "in the footer" / "in the footer and the page content"; "" when no section is known. */
-export function sectionPhrase(counts: SectionCounts): string {
+/** "the footer and the page content", most links first; "" when no section is known. */
+function sectionList(counts: SectionCounts): string {
   const names = (Object.keys(counts) as (keyof SectionCounts)[])
     .sort((a, b) => (counts[b] ?? 0) - (counts[a] ?? 0) || a.localeCompare(b))
     .map((section) => PHRASE[section]);
   if (names.length === 0) return "";
-  if (names.length <= 2) return `in ${names.join(" and ")}`;
-  return `in ${names.slice(0, 2).join(", ")} and ${names.length - 2} more`;
+  if (names.length <= 2) return names.join(" and ");
+  return `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`;
+}
+
+/** "in the footer" / "in the footer and the page content"; "" when no section is known. */
+export function sectionPhrase(counts: SectionCounts): string {
+  const list = sectionList(counts);
+  return list ? `in ${list}` : "";
+}
+
+/** "from the footer and the navigation"; "" when no section is known. */
+export function sectionFromPhrase(counts: SectionCounts): string {
+  const list = sectionList(counts);
+  return list ? `from ${list}` : "";
 }

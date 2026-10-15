@@ -18,7 +18,12 @@ import { SQLiteStorage } from "@squirrelscan/crawler";
 import { loadAllRules } from "@squirrelscan/rules";
 import { normalizeUrl } from "@squirrelscan/utils";
 import type { ParsedPage, Rule, RuleContext } from "@squirrelscan/rules";
-import type { LinkData, PageFeatureRow, PageRecord } from "@squirrelscan/core-contracts";
+import type {
+  LinkData,
+  LinkSection,
+  PageFeatureRow,
+  PageRecord,
+} from "@squirrelscan/core-contracts";
 
 import { createSiteQuery } from "../src/site-query";
 
@@ -421,6 +426,66 @@ describe("SiteQuery dual-path — links/no-contextual-inbound", () => {
 
     expect(streamed).toEqual(legacy);
     expect(legacy[0]!.status).toBe("pass");
+    await run(store.close());
+  });
+});
+
+// ── #2307: where the inbound links sit ────────────────────────────────────────
+
+/** A sitewide-chrome link with the section the parser labelled it with. */
+function placed(url: string, section: LinkSection): LinkData {
+  return { ...chrome(url), section };
+}
+
+// /legal is linked from the footer on three pages and from the navigation on one; /deep is
+// linked once, from body copy, which carries no section here.
+const SECTIONED_FIXTURE: PageRecord[] = [
+  pageRow(BASE, [link("/a"), link("/b"), placed("/legal", "footer")]),
+  pageRow("https://example.com/a", [link("/b"), link("/deep"), placed("/legal", "navigation")]),
+  pageRow("https://example.com/b", [link("/a"), placed("/legal", "footer")]),
+  pageRow("https://example.com/deep", [link("/a")]),
+  pageRow("https://example.com/legal", [placed("/legal", "footer")]),
+];
+
+describe("SiteQuery — inbound link sections (#2307)", () => {
+  test("counts the inbound links per section, under the same keys as the raw counts", async () => {
+    const store = await freshStore();
+    for (const p of SECTIONED_FIXTURE) await run(store.upsertPage(CRAWL, p));
+
+    const sq = await run(createSiteQuery(store, CRAWL));
+    const sections = sq.inboundSectionCounts!();
+    const all = sq.incomingLinkCounts();
+
+    expect(sections.get("https://example.com/legal")).toEqual({ footer: 3, navigation: 1 });
+    // Body links carry no section, so those pages get no entry at all.
+    expect(sections.has("https://example.com/deep")).toBe(false);
+    expect(sections.has("https://example.com/a")).toBe(false);
+    // Every entry is a page of the crawl, and never counts more links than the raw map does.
+    for (const [url, counts] of sections) {
+      expect(all.has(url)).toBe(true);
+      const total = Object.values(counts).reduce((sum, n) => sum + (n ?? 0), 0);
+      expect(total).toBeLessThanOrEqual(all.get(url)!);
+    }
+    await run(store.close());
+  });
+
+  test("links/no-contextual-inbound names the sections identically on both paths", async () => {
+    const store = await freshStore();
+    for (const p of SECTIONED_FIXTURE) await run(store.upsertPage(CRAWL, p));
+
+    const { legacy, streamed } = await runBothWays(store, contextualRule, {
+      minInboundLinks: 2,
+      excludePatterns: [],
+    });
+
+    expect(streamed).toEqual(legacy);
+    expect(legacy[0]!.items).toEqual([
+      {
+        id: "https://example.com/legal",
+        label: "https://example.com/legal, linked only from the footer and the navigation",
+        meta: { sections: { footer: 3, navigation: 1 } },
+      },
+    ]);
     await run(store.close());
   });
 });
