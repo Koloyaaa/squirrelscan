@@ -23,6 +23,14 @@ import {
   primaryEntities,
   stableIdPercent,
 } from "../entities";
+import {
+  structureChromeLine,
+  structureDegradedLine,
+  structureAttr,
+  structurePageTypesLine,
+  structureSectionName,
+  structureTotalsLine,
+} from "../structure";
 import { publishedReportNote, seedRedirect } from "../coverage";
 import { LLM_REPORT } from "@squirrelscan/core-contracts/limits";
 import { stripControlChars } from "@squirrelscan/core-contracts/control-chars";
@@ -358,6 +366,33 @@ export function renderLlm(report: AuditReport, options?: LlmRenderOptions): stri
       );
     }
     lines.push("</technologies>");
+  }
+
+  // Page structure (#2307) — report-only context for the agent (does not affect the score): which
+  // part of the page the links sit in, and the page types. The sentences are for reading, the
+  // rows for counting.
+  if (report.structure) {
+    const structure = report.structure;
+    const share = structure.chrome.share;
+    lines.push(
+      `<page-structure pages="${structureAttr(structure.pages)}" links="${structureAttr(structure.totalLinks)}"${typeof share === "number" ? ` chrome-share="${structureAttr(share)}"` : ""}>`,
+    );
+    for (const line of [
+      structurePageTypesLine(structure),
+      structureChromeLine(structure),
+      structureTotalsLine(structure),
+      structureDegradedLine(structure),
+    ]) {
+      if (line) lines.push(`${indent(1)}${escapeXml(line)}`);
+    }
+    // The section id as the JSON report spells it, so a row can be matched to `structure.sections`.
+    for (const row of structure.sections) {
+      if (structureSectionName(row.section) === undefined) continue;
+      lines.push(
+        `${indent(1)}<section name="${escapeXml(row.section)}" pages="${structureAttr(row.pages)}" links="${structureAttr(row.links)}"/>`,
+      );
+    }
+    lines.push("</page-structure>");
   }
 
   const categoryIssues = groupIssuesByCategory(report.ruleResults, report.checkTallies);

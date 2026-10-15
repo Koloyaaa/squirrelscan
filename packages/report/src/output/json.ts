@@ -2,7 +2,7 @@
 
 import type { AuditFailureReasonCode, RefusedFetch } from "@squirrelscan/core-contracts";
 import type { ResolvedAuditSettings } from "@squirrelscan/core-contracts/audit-levels";
-import type { AuditReport, AuditStatus, CheckItem, EntityMap } from "../types";
+import type { AuditReport, AuditStatus, CheckItem, EntityMap, ReportStructure } from "../types";
 import { reportFailureReasonCode } from "../failure-notice";
 import { getScoreGrade } from "../scoring";
 import { getGroupName } from "../categories";
@@ -188,6 +188,10 @@ interface SlimJsonReport {
   // Report-only — never part of the score. The entity-map document (#2091),
   // emitted verbatim so it still validates against the core-contracts schema.
   entities?: EntityMap;
+  // Report-only — never part of the score (#2307). Where the audited pages' links sit and the
+  // page types the classifier gave them. Absent when no audited page carries either, which is
+  // every crawl stored before the page classifier existed.
+  structure?: ReportStructure;
   // Report-only — never part of the score. Present when cloud tech-detect ran.
   technologies?: {
     firstScan: boolean;
@@ -405,6 +409,8 @@ function buildSlimReport(report: AuditReport, version: string): SlimJsonReport {
           },
         }
       : {}),
+    // Page structure (#2307): the report-level block as data. Report-only, never scored.
+    ...(report.structure ? { structure: report.structure } : {}),
     // Entities (#2091): the whole entity-map document, verbatim. Report-only
     // and never part of the score. Emitted as-is rather than reshaped so a
     // consumer can validate it against the core-contracts zod schema.

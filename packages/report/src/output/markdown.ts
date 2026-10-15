@@ -9,6 +9,14 @@ import { getScoreGrade } from "../scoring";
 import { REPORT_SOURCE_PAGES_PREVIEW, REPORT_PAGES_HARD_CAP } from "../constants";
 import { groupIssuesByCategory, flattenIssuesBySeverity } from "../grouping";
 import { entityMarkdownSection } from "../entities";
+import {
+  structureChromeLine,
+  structureDegradedLine,
+  structurePageTypesLine,
+  structureRows,
+  structureNumber,
+  structureTotalsLine,
+} from "../structure";
 import { groupTechnologies, techChangeSummary, techIconUrl } from "../technologies";
 import { SITE_PROFILE_NOTE, siteProfileFlags, siteProfileRows } from "../site-metadata";
 import { EDITOR_SUMMARY_NOTE, editorSummaryView } from "../editor-summary";
@@ -326,6 +334,45 @@ export function renderMarkdown(report: AuditReport, options?: MarkdownRenderOpti
       });
       lines.push(`**${group.emoji} ${group.label}**  `);
       lines.push(cells.join(" · "));
+      lines.push("");
+    }
+  }
+
+  // Page structure (#2307) — report-only, never part of the score. Placed after the
+  // technologies block; absent when no audited page carried link sections or a page type.
+  if (report.structure) {
+    const structure = report.structure;
+    lines.push("## Page structure");
+    lines.push("");
+    const typesLine = structurePageTypesLine(structure);
+    if (typesLine) {
+      lines.push(typesLine);
+      lines.push("");
+    }
+    const rows = structureRows(structure);
+    if (rows.length > 0) {
+      lines.push("| Section | Pages | Links |");
+      lines.push("|---------|------:|------:|");
+      for (const row of rows) {
+        lines.push(
+          `| ${row.section} | ${structureNumber(row.pages)} | ${structureNumber(row.links)} |`,
+        );
+      }
+      lines.push("");
+    }
+    const totals = structureTotalsLine(structure);
+    if (totals) {
+      lines.push(totals);
+      lines.push("");
+    }
+    const chromeLine = structureChromeLine(structure);
+    if (chromeLine) {
+      lines.push(chromeLine);
+      lines.push("");
+    }
+    const degradedLine = structureDegradedLine(structure);
+    if (degradedLine) {
+      lines.push(degradedLine);
       lines.push("");
     }
   }

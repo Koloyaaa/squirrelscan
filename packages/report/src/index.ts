@@ -100,6 +100,26 @@ export {
   type TechGroup,
 } from "./technologies";
 
+// Page structure block helpers (#2307; report-only / non-scoring, shared across formats + CLI console)
+export {
+  CHROME_SECTIONS,
+  MIN_RULES_CONFIDENCE,
+  createStructureBuilder,
+  extractPageStructure,
+  pageTypePhrase,
+  structureAttr,
+  structureChromeLine,
+  structureDegradedLine,
+  structureNumber,
+  structurePageTypesLine,
+  structureRowDetail,
+  structureRows,
+  structureSectionName,
+  structureTotalsLine,
+  type StructureBuilder,
+  type StructureSource,
+} from "./structure";
+
 // Site profile section helpers (report-only / non-scoring; shared across formats + CLI console)
 export {
   SITE_PROFILE_NOTE,

@@ -14,6 +14,12 @@ import {
   getSubcategoryName,
   groupTechnologies,
   techChangeSummary,
+  structureChromeLine,
+  structureDegradedLine,
+  structureRowDetail,
+  structurePageTypesLine,
+  structureRows,
+  structureTotalsLine,
   ENTITY_CONSOLE_LIMIT,
   ENTITY_EMPTY_MESSAGE,
   entityLabel,
@@ -38,6 +44,7 @@ import type {
   EntityMap,
   GroupScore,
   HealthScore,
+  ReportStructure,
   ReportTechnologies,
   SiteMetadata,
 } from "@/types";
@@ -201,6 +208,12 @@ export function generateConsoleReport(
   if (report.technologies && report.technologies.items.length > 0) {
     log("");
     printTechnologies(report.technologies);
+  }
+
+  // Page structure (#2307) — report-only link sections and page types, not scored.
+  if (report.structure) {
+    log("");
+    printStructure(report.structure);
   }
 
   if (report.entityMap) {
@@ -451,6 +464,37 @@ function printTechnologies(tech: ReportTechnologies): void {
       .join(fmt.dim(" · "));
     log(`${group.emoji} ${fmt.bold(group.label.padEnd(22))} ${names}`);
   }
+}
+
+/**
+ * The Page structure block (#2307): which part of the page the links sit in, and the page types.
+ * Report-only and non-scoring, like Technologies.
+ */
+function printStructure(structure: ReportStructure): void {
+  log(fmt.bold("PAGE STRUCTURE"));
+  log(fmt.dim("Where the links on your pages sit. Not part of the score."));
+  const typesLine = structurePageTypesLine(structure);
+  if (typesLine) {
+    log("");
+    log(typesLine);
+  }
+  const rows = structureRows(structure);
+  if (rows.length > 0) {
+    log("");
+    const width = Math.max(...rows.map((r) => r.section.length));
+    for (const row of rows) {
+      log(`${row.section.padEnd(width)}  ${fmt.dim(structureRowDetail(row))}`);
+    }
+  }
+  const totals = structureTotalsLine(structure);
+  if (totals) log(fmt.dim(totals));
+  const chromeLine = structureChromeLine(structure);
+  if (chromeLine) {
+    log("");
+    log(chromeLine);
+  }
+  const degradedLine = structureDegradedLine(structure);
+  if (degradedLine) log(fmt.dim(degradedLine));
 }
 
 /**

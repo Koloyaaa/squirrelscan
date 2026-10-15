@@ -429,6 +429,14 @@ export interface AuditReport {
    */
   technologies?: ReportTechnologies;
   /**
+   * Page structure (#2307): where the audited pages' links sit (header, footer, navigation,
+   * sidebar, content, ...) and what type the page classifier says each page is. Like
+   * `technologies`, REPORT-ONLY: it NEVER contributes to `healthScore`. Absent when no audited
+   * page carries a link section or a classification, which is every crawl stored before the
+   * page classifier existed.
+   */
+  structure?: ReportStructure;
+  /**
    * Resolved site-metadata "profile" (site type, business category, country,
    * audience, identity, contacts, socials, domain age). Like `technologies`,
    * it is a REPORT-ONLY section that NEVER contributes to `healthScore`.
@@ -943,6 +951,55 @@ export interface ReportTechnologies {
   advisories?: SoftwareAdvisory[];
   /** ISO timestamp of the scan that produced this snapshot. */
   scannedAt?: string;
+}
+
+/** One link section's footprint across the audited pages. */
+export interface ReportStructureSection {
+  section: Exclude<LinkSection, "unknown">;
+  /** Audited pages with at least one link in this section. */
+  pages: number;
+  /** Links in this section, summed over those pages (every anchor counts, repeats included). */
+  links: number;
+}
+
+/** How many audited pages the classifier gave each page type. */
+export interface ReportStructurePageType {
+  label: string;
+  pages: number;
+}
+
+/**
+ * The report-level page structure block (#2307). Computed over the audited pages that carry
+ * link-section or classification data.
+ */
+export interface ReportStructure {
+  /** Audited pages that carry section or classification data. */
+  pages: number;
+  /** Sections other than `unknown`, most links first; sections with no links are left out. */
+  sections: ReportStructureSection[];
+  /** Links whose section is `unknown`. */
+  unknownLinks: number;
+  /** Every link counted above, `unknown` included. */
+  totalLinks: number;
+  /**
+   * Internal links in the header, footer, navigation and sidebar against internal links in the
+   * page content. `share` is chrome over chrome plus content, 0 to 1, rounded to three
+   * decimals; null when the audited pages have no internal link in either.
+   */
+  chrome: { links: number; contentLinks: number; share: number | null };
+  pageTypes: {
+    /**
+     * Labels the report stands behind: a model answer, or a markup-rules answer at 0.8
+     * confidence or more. Most pages first.
+     */
+    counts: ReportStructurePageType[];
+    /** Pages with no standing label: no answer, `unknown`, or a weak rules answer. */
+    notClassified: number;
+    /** Pages whose counted label came from the model. */
+    byModel: number;
+    /** Pages where part of the classification fell back to the markup rules. */
+    degraded: number;
+  };
 }
 
 // RedirectHop and RedirectChain are now in ./storage.ts (re-exported above)

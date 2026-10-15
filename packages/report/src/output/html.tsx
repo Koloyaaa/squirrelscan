@@ -28,6 +28,14 @@ import {
   entityViewerMarkup,
   entityViewerScript,
 } from "../entities-viewer";
+import {
+  structureChromeLine,
+  structureDegradedLine,
+  structureRowDetail,
+  structurePageTypesLine,
+  structureRows,
+  structureTotalsLine,
+} from "../structure";
 import { groupTechnologies, techChangeSummary } from "../technologies";
 import {
   SITE_PROFILE_NOTE,
@@ -1183,6 +1191,43 @@ function TechnologiesSection({ report }: { report: AuditReport }) {
   );
 }
 
+/**
+ * Page structure (#2307): link sections as badges (the Technologies badge styles, so no new CSS)
+ * with the same sentences the text formats print. Report-only; absent without section data.
+ */
+function StructureSection({ report }: { report: AuditReport }) {
+  const structure = report.structure;
+  if (!structure) return null;
+  const lines = [
+    structurePageTypesLine(structure),
+    structureChromeLine(structure),
+    structureTotalsLine(structure),
+    structureDegradedLine(structure),
+  ].filter((line): line is string => line !== null);
+  const rows = structureRows(structure);
+  return (
+    <div className="tech-section">
+      <h2>Page structure</h2>
+      <div className="tech-note">Where the links on your pages sit. Informational, not part of the score.</div>
+      {rows.length > 0 && (
+        <div className="tech-badges">
+          {rows.map((row) => (
+            <span className="tech-badge" key={row.section}>
+              <span>{row.section}</span>
+              <span className="tech-ver">
+                {structureRowDetail(row)}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
+      {lines.map((line) => (
+        <p key={line}>{line}</p>
+      ))}
+    </div>
+  );
+}
+
 // Single STATIC inline script that hides any `.screenshot-section` whose <img>
 // fails to load. The screenshot is captured async/best-effort, so its URL may
 // 404 until ready (or never resolve) — this prunes the empty frame at runtime.
@@ -1498,6 +1543,7 @@ function ReportPage({
           <SiteProfileSection report={report} />
           <DomainStatsSection report={report} />
           <TechnologiesSection report={report} />
+          <StructureSection report={report} />
           {hasIssues ? (
             <IssuesByGroup categories={categoryIssues} />
           ) : isFailedOrBlocked ? null : (
