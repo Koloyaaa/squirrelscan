@@ -52,11 +52,20 @@ function only(ctx: RuleContext): CheckResult {
 const NOT_CONFIDENT = "Page type not classified with enough confidence to expect structured data";
 
 describe("schema/expected-type", () => {
-  test("model product_detail 0.99 with no Product fails and names label, confidence and family", () => {
+  test("model product_detail 0.99 with no Product fails; confidence is in details, not the message", () => {
     const check = only(ctxFor(withSchema({ "@type": "WebPage", name: "x" }), classification("product_detail", 0.99)));
     expect(check.status).toBe("fail");
-    expect(check.message).toBe("Reads as a product page (classifier 0.99) but declares no Product structured data");
+    expect(check.message).toBe("Reads as a product page but declares no Product structured data");
     expect(check.details).toMatchObject({ pageType: "product_detail", confidence: 0.99, expected: "Product" });
+  });
+
+  test("two pages of one page type at different confidences share one message", () => {
+    const html = "<html><body></body></html>";
+    const a = only(ctxFor(html, classification("docs", 0.93)));
+    const b = only(ctxFor(html, classification("docs", 0.98)));
+    expect(a.message).toBe(b.message);
+    expect(a.details).toMatchObject({ confidence: 0.93 });
+    expect(b.details).toMatchObject({ confidence: 0.98 });
   });
 
   test("a page with no JSON-LD at all fails the same way", () => {
@@ -139,7 +148,7 @@ describe("schema/expected-type", () => {
     const check = only(ctxFor(withSchema({ "@type": "WebPage" }), classification("blog_post", 0.97)));
     expect(check.status).toBe("fail");
     expect(check.message).toBe(
-      "Reads as a blog post (classifier 0.97) but declares no Article or BlogPosting structured data",
+      "Reads as a blog post but declares no Article or BlogPosting structured data",
     );
   });
 
@@ -174,7 +183,7 @@ describe("schema/expected-type", () => {
   test("contact with no ContactPage or Organization fails", () => {
     const check = only(ctxFor(withSchema({ "@type": "WebPage" }), classification("contact", 0.99)));
     expect(check.status).toBe("fail");
-    expect(check.message).toContain("Reads as a contact page (classifier 0.99)");
+    expect(check.message).toBe("Reads as a contact page but declares no ContactPage or Organization structured data");
   });
 
   test("contact is satisfied by ContactPage or by an Organization", () => {
@@ -209,7 +218,7 @@ describe("schema/expected-type", () => {
     const check = only(ctxFor("<html><body></body></html>", classification("docs", 0.93)));
     expect(check.status).toBe("fail");
     expect(check.message).toBe(
-      "Reads as a documentation page (classifier 0.93) but declares no Article, TechArticle, HowTo or FAQPage structured data",
+      "Reads as a documentation page but declares no Article, TechArticle, HowTo or FAQPage structured data",
     );
     for (const type of ["TechArticle", "HowTo", "FAQPage", "APIReference"]) {
       expect(only(ctxFor(withSchema({ "@type": type }), classification("docs", 0.93))).status).toBe("pass");
