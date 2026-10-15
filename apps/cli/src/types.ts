@@ -197,6 +197,7 @@ import type {
   GroupScore as _GS,
   HealthScore as _HS,
   RefusedFetch,
+  ReportStructure as _RST,
   ReportTechnologies as _RT,
   RuleCategory as _RC,
   SiteMetadata as _SM,
@@ -208,6 +209,7 @@ export type GroupScore = _GS;
 export type HealthScore = _HS;
 export type RuleCategory = _RC;
 export type ReportTechnologies = _RT;
+export type ReportStructure = _RST;
 export type SiteMetadata = _SM;
 export type EditorSummary = _ES;
 export type EntityMap = _EM;
@@ -483,6 +485,12 @@ export interface AuditReport {
    * tech-detect ran (logged-in users with cloud enabled).
    */
   technologies?: ReportTechnologies;
+  /**
+   * Page structure (#2307) — REPORT-ONLY / non-scoring. Where the audited pages' links sit and
+   * the page types the classifier gave them. Mirrors core-contracts `AuditReport`. Absent when no
+   * audited page carries a link section or a classification.
+   */
+  structure?: ReportStructure;
   /**
    * Resolved Stage-0 site profile — REPORT-ONLY / non-scoring. Present only when
    * the credited cloud `site-metadata` service resolved it (logged-in + cloud +

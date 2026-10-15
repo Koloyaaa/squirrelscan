@@ -17,6 +17,14 @@ import {
   entitySummaryLine,
   primaryEntities,
 } from "../entities";
+import {
+  structureChromeLine,
+  structureDegradedLine,
+  structureNumber,
+  structurePageTypesLine,
+  structureRows,
+  structureTotalsLine,
+} from "../structure";
 import { groupTechnologies, techChangeSummary } from "../technologies";
 import { SITE_PROFILE_NOTE, siteProfileFlags, siteProfileRows } from "../site-metadata";
 import { EDITOR_SUMMARY_NOTE, editorSummaryView } from "../editor-summary";
@@ -260,6 +268,36 @@ export function renderText(report: AuditReport, options?: TextRenderOptions): st
         .join(", ");
       write(`${group.emoji} ${group.label}: ${names}`);
     }
+    write("");
+  }
+
+  // Page structure (#2307) — report-only, never part of the score.
+  if (report.structure) {
+    const structure = report.structure;
+    write("PAGE STRUCTURE");
+    write("-".repeat(40));
+    const typesLine = structurePageTypesLine(structure);
+    if (typesLine) {
+      write(typesLine);
+      write("");
+    }
+    const rows = structureRows(structure);
+    if (rows.length > 0) {
+      const width = Math.max("Section".length, ...rows.map((r) => r.section.length));
+      write(`${"Section".padEnd(width)}  ${"Pages".padStart(7)}  ${"Links".padStart(8)}`);
+      for (const row of rows) {
+        write(
+          `${row.section.padEnd(width)}  ${structureNumber(row.pages).padStart(7)}  ${structureNumber(row.links).padStart(8)}`,
+        );
+      }
+      write("");
+    }
+    const totals = structureTotalsLine(structure);
+    if (totals) write(totals);
+    const chromeLine = structureChromeLine(structure);
+    if (chromeLine) write(chromeLine);
+    const degradedLine = structureDegradedLine(structure);
+    if (degradedLine) write(degradedLine);
     write("");
   }
 

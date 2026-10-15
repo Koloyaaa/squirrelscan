@@ -11,6 +11,7 @@ import { editorSummaryView } from "../editor-summary";
 import { entityPageTotal, stableIdPercent } from "../entities";
 import { seedRedirect } from "../coverage";
 import { notCheckedLine, notCheckedRules } from "../not-checked";
+import { pageTypePhrase, structureAttr, structureSectionName } from "../structure";
 
 export interface XmlRenderOptions {
   version?: string;
@@ -157,6 +158,34 @@ export function renderXml(report: AuditReport, options?: XmlRenderOptions): stri
       );
     }
     lines.push(`${indent(1)}</technologies>`);
+  }
+
+  // Page structure (#2307) — report-only (does not affect the health score). Section and page
+  // type names are the ids the JSON report uses.
+  if (report.structure) {
+    const structure = report.structure;
+    const share = structure.chrome.share;
+    lines.push(
+      `${indent(1)}<page-structure pages="${structureAttr(structure.pages)}" links="${structureAttr(structure.totalLinks)}" unknown-links="${structureAttr(structure.unknownLinks)}" chrome-links="${structureAttr(structure.chrome.links)}" content-links="${structureAttr(structure.chrome.contentLinks)}"${typeof share === "number" ? ` chrome-share="${structureAttr(share)}"` : ""}>`,
+    );
+    for (const row of structure.sections) {
+      if (structureSectionName(row.section) === undefined) continue;
+      lines.push(
+        `${indent(2)}<section name="${escapeXml(row.section)}" pages="${structureAttr(row.pages)}" links="${structureAttr(row.links)}"/>`,
+      );
+    }
+    const types = structure.pageTypes;
+    lines.push(
+      `${indent(2)}<page-types not-classified="${structureAttr(types.notClassified)}" by-model="${structureAttr(types.byModel)}" degraded="${structureAttr(types.degraded)}">`,
+    );
+    for (const type of types.counts) {
+      if (pageTypePhrase(type.label, type.pages) === undefined) continue;
+      lines.push(
+        `${indent(3)}<page-type label="${escapeXml(type.label)}" pages="${structureAttr(type.pages)}"/>`,
+      );
+    }
+    lines.push(`${indent(2)}</page-types>`);
+    lines.push(`${indent(1)}</page-structure>`);
   }
 
   const categoryIssues = groupIssuesByCategory(report.ruleResults, report.checkTallies);

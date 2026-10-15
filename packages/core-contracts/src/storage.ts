@@ -4,6 +4,7 @@
 import type { Effect } from "effect";
 
 import type { AuditFailureDetail } from "./failure-reason";
+import type { ClassifiedPageType, LinkSection } from "./index";
 import type { RefusedFetch } from "./refused-fetch";
 
 // ============================================
@@ -732,6 +733,27 @@ export interface SitePageRecord {
 // written, v1 behaviour is byte-identical.
 
 /**
+ * What one page contributes to the report's page structure block (#2307): its links counted per
+ * section and the page classifier's answer. Absent from a page's scalars when the page has
+ * neither a link section nor a classification (a parse stored before the classifier existed).
+ */
+export interface PageStructureScalars {
+  /**
+   * Links per section, every anchor counted. Links with no section at all (an old parse) are
+   * left out, so `unknown` means "the page says nothing about where this sits".
+   */
+  sections: Partial<Record<LinkSection, number>>;
+  /** Internal links in the header, footer, navigation or sidebar. */
+  chromeInternal: number;
+  /** Internal links in the page content. */
+  contentInternal: number;
+  /** The classifier's page type answer; null when the page was not classified. */
+  pageType: ClassifiedPageType | null;
+  /** The classifier fell back to the markup rules for part of this page. */
+  degraded: boolean;
+}
+
+/**
  * The per-page scalars the REPORT needs and no rule reads (#2343).
  *
  * `reconstructReport` used to recover these by re-parsing every stored page —
@@ -763,6 +785,11 @@ export interface PageReportScalars {
   /** `parsed.content.isThinContent` — stored, not re-derived from wordCount,
    *  because the parser has two code paths that set it. */
   thinContent: boolean;
+  /**
+   * Link sections and page type for the report's page structure block (#2307). Optional: absent
+   * on a row stored before it existed, and on a page with no section or classification data.
+   */
+  structure?: PageStructureScalars;
 }
 
 /** One `<link rel="alternate" hreflang>` annotation, as the parser extracts it. */
