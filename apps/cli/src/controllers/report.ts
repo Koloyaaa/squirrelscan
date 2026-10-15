@@ -35,7 +35,11 @@ import { warnEvictedPages } from "@/crawler/storage/eviction-notice";
 import { SQLiteStorage } from "@/crawler/storage/sqlite";
 import { reconstructReport } from "@/reports/reconstruct";
 import { retiredAuditReason } from "@/reports/retired";
-import { isValidCategory, normalizeCategoryCode } from "@/rules/categories";
+import {
+  CATEGORIES,
+  isValidCategory,
+  normalizeCategoryCode,
+} from "@/rules/categories";
 import { getProjectsPath } from "@/self/paths";
 import {
   isEquivalentAuditTarget,
@@ -164,6 +168,11 @@ interface SlimJsonReport {
     description: string;
     solution?: string;
     domain: string;
+    /**
+     * Display name the report was written with (e.g. "Reliability"), absent in slim JSON written
+     * before the field was read back. The rule id's prefix is NOT always the category (pub#836).
+     */
+    category?: string;
     subcategory?: string;
     severity: "error" | "warning" | "info";
     checks: Array<{
@@ -187,14 +196,27 @@ function isSlimJsonReport(
   );
 }
 
+/** Category code for a category display name ("Reliability" → "reliability"); undefined when unknown. */
+function categoryCodeByName(name: string | undefined): string | undefined {
+  if (!name) return undefined;
+  const lower = name.trim().toLowerCase();
+  return Object.values(CATEGORIES).find((c) => c.name.toLowerCase() === lower)
+    ?.code;
+}
+
 function convertSlimReport(report: SlimJsonReport): AuditReport {
   const ruleResults: Record<string, ReportRuleResult> = {};
 
   for (const issue of report.issues) {
+    // The category the report was written with wins: a rule can sit in a category other than its
+    // id prefix (`links/broken-links` is Reliability since pub#836), and slim JSON written before
+    // that still says "Links". Slim JSON that names no known category falls back to the prefix.
     // Normalize legacy code prefixes (e.g. stable rule IDs keep the `adblock/`
     // prefix while the category was renamed to `blocking`).
     const categoryCandidate = normalizeCategoryCode(
-      issue.ruleId.split("/")[0] ?? "other"
+      categoryCodeByName(issue.category) ??
+        issue.ruleId.split("/")[0] ??
+        "other"
     );
     const category = isValidCategory(categoryCandidate)
       ? categoryCandidate
