@@ -17,6 +17,11 @@ How it works:
 
 ## [Unreleased]
 
+### Security
+
+- An audit of a site on a private network (`localhost`, a private address, a `.local` name) no longer reads or writes the external link cache that every audit on the machine shares. It used to cache what it reached from inside your network, and a later audit of a public site could be answered from that cache for a public name that resolves to a private address. Results cached by earlier versions are not reused, so each link is checked again once after you update. See [External links](https://docs.squirrelscan.com/configuration/external-links). #775
+- A signed-in audit of a site on a private network no longer sends the cloud's dead-link check its links whose URL names a non-public host (a private or loopback address, `localhost`, a `.local` or single-label name). It checks them itself, so those addresses no longer leave your machine that way. The cloud check's refusal of a link, because the link or a redirect it leads to is on a non-public address, is never reported as a broken link. #775
+
 ### Changed
 
 - Internal: the CLI no longer carries its own copies of the external link checker and of the sitemap and robots.txt fetchers. Nothing had run them since audits moved to the shared engine and crawler, so a fix to one could look covered by a test of the other. Their tests now run against the crawler and utils packages (the sitemap fetch deadline, sitemap parsing, robots.txt parsing and allow rules), or were dropped where an engine test already covers them. What an audit does is unchanged. #756
