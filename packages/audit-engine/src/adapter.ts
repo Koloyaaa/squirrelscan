@@ -548,6 +548,13 @@ export interface ResourceCheckOverrides {
    * name. Defaults to false, the CLI, where the engine pins them itself.
    */
   egressPinnedByTransport?: boolean;
+  /**
+   * No request to any host outside the audited site and its subdomains
+   * (`squirrel audit --offline`, pub#807): the third-party asset status checks
+   * are skipped, so reliability/broken-resources reads them as not measured,
+   * and a sitemap URL on another host gets no status check.
+   */
+  ownSiteOnly?: boolean;
 }
 
 /** Most preloaded chunks fetched per audit, on top of the regular script fetch. */
@@ -612,6 +619,12 @@ export interface PreFetchedAssets {
   assetCapDropped?: AssetCapDropped;
   pdfSizes: ResourceSizeData[];
   sitemapUrlStatuses: SitemapUrlStatusData[];
+  /**
+   * Sitemap URLs on another site an own-site-only audit left unchecked
+   * (pub#807), so crawl/sitemap-4xx can say so instead of passing. Absent or
+   * zero means none were dropped.
+   */
+  sitemapOffSiteSkipped?: number;
   /**
    * Status of internal link targets the crawl did not fetch (repo#2729): one
    * HEAD (then GET) per target, most-linked first, read by links/broken-links as
@@ -1163,15 +1176,18 @@ export function fetchAssetsFromOccurrences(
     // Third-party copies feed reliability/broken-resources alone (#703), so
     // they are requested only when that rule runs, and get a per-kind cap of
     // their own, never above the caller's item cap.
-    const probeExternalAssets = isRuleEnabled(
-      BROKEN_RESOURCES_RULE_ID,
-      // The runner's own defaults (runner.ts), so the two never disagree.
-      config.rules?.enable ?? [],
-      config.rules?.disable ?? [],
-      (config.rule_options as Record<string, { enabled?: boolean }> | undefined)?.[
-        BROKEN_RESOURCES_RULE_ID
-      ],
-    );
+    // pub#807: an own-site-only (offline) audit sends nothing to a third party.
+    const probeExternalAssets =
+      overrides?.ownSiteOnly !== true &&
+      isRuleEnabled(
+        BROKEN_RESOURCES_RULE_ID,
+        // The runner's own defaults (runner.ts), so the two never disagree.
+        config.rules?.enable ?? [],
+        config.rules?.disable ?? [],
+        (config.rule_options as Record<string, { enabled?: boolean }> | undefined)?.[
+          BROKEN_RESOURCES_RULE_ID
+        ],
+      );
     const probeWebAppManifests = isRuleEnabled(
       WEB_APP_MANIFEST_RULE_ID,
       config.rules?.enable ?? [],
@@ -1223,7 +1239,14 @@ export function fetchAssetsFromOccurrences(
     // Authorization, cookies), no prior-crawl cache, public addresses only.
     // One cap for the pool as a whole: each half would otherwise get the
     // checker's own default cap.
-    const sitemapTargets = orphanCandidates.slice(
+    // pub#807: an own-site-only audit checks no sitemap URL on another site. They
+    // are left out before the cap, so they take none of its slots.
+    const sitemapCandidates =
+      overrides?.ownSiteOnly === true
+        ? orphanCandidates.filter((url) => isOwnSiteUrl(url))
+        : orphanCandidates;
+    const sitemapOffSiteSkipped = orphanCandidates.length - sitemapCandidates.length;
+    const sitemapTargets = sitemapCandidates.slice(
       0,
       Math.min(sitemapStatusLimit, maxResources ?? RESOURCE_SIZE_LIMITS.MAX_RESOURCES_TO_CHECK),
     );
@@ -1460,7 +1483,15 @@ export function fetchAssetsFromOccurrences(
               ),
             },
           }
-        : {}),
+        : overrides?.ownSiteOnly === true &&
+            resourceOccurrences.externalScripts.size +
+              resourceOccurrences.externalCss.size +
+              resourceOccurrences.externalFonts.size ===
+              0
+          ? // pub#807: pages that reference no third-party resource leave
+            // nothing unmeasured, so the rule need not say there was.
+            { externalAssets: { scripts: [], css: [], fonts: [] } }
+          : {}),
       assetCapDropped: assetCapDroppedOf(
         probeExternalAssets
           ? resourceOccurrences
@@ -1516,6 +1547,7 @@ export function fetchAssetsFromOccurrences(
         // to crawl/sitemap-4xx, which would otherwise report it as dead.
         rateLimited: check.rateLimited,
       })),
+      ...(sitemapOffSiteSkipped > 0 ? { sitemapOffSiteSkipped } : {}),
       ...(internalLinksEnabled
         ? {
             linkTargetStatuses: resourceResults.linkTargets.results.map((check) => ({
@@ -2052,6 +2084,7 @@ export function runRulesOnStorage(
       externalLinkCheck: crawl?.stats?.externalLinkCheck,
       linkTargetStatuses: assets.linkTargetStatuses,
       internalLinkProbe: assets.internalLinkProbe,
+      sitemapOffSiteSkipped: assets.sitemapOffSiteSkipped,
       fetchedTargets,
       resourceSizes,
       scripts,
@@ -2838,6 +2871,7 @@ function buildStreamingSiteData(
       externalLinkCheck: crawl?.stats?.externalLinkCheck,
       linkTargetStatuses: assets.linkTargetStatuses,
       internalLinkProbe: assets.internalLinkProbe,
+      sitemapOffSiteSkipped: assets.sitemapOffSiteSkipped,
       fetchedTargets,
       resourceSizes,
       scripts,
