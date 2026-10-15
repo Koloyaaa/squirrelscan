@@ -17,6 +17,10 @@ How it works:
 
 ## [Unreleased]
 
+### Changed
+
+- Internal: the CLI no longer carries its own copies of the external link checker and of the sitemap and robots.txt fetchers. Nothing had run them since audits moved to the shared engine and crawler, so a fix to one could look covered by a test of the other. Their tests now run against the crawler and utils packages (the sitemap fetch deadline, sitemap parsing, robots.txt parsing and allow rules), or were dropped where an engine test already covers them. What an audit does is unchanged. #756
+
 ### Fixed
 
 - `crawl/sitemap-valid` reads a sitemap whose root carries a prefix bound to the sitemap namespace, such as `<ns0:urlset xmlns:ns0="http://www.sitemaps.org/schemas/sitemap/0.9">`, which Python's ElementTree writes by default. It used to report `Unknown sitemap format` and read none of its URLs. A prefixed sitemap index reads too, and a root whose prefix is bound to another namespace is still an unknown format. See [crawl/sitemap-valid](https://docs.squirrelscan.com/rules/crawl/sitemap-valid). #759
