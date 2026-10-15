@@ -17,6 +17,10 @@ How it works:
 
 ## [Unreleased]
 
+### Added
+
+- `schema/expected-type` flags a page that the bundled page classifier is sure about and that declares none of the structured data its type should carry: `Product` on a product page, `Article` or `BlogPosting` on an article or blog post, `CollectionPage` or `ItemList` on a listing, `ContactPage` or an organization type on a contact page, `AboutPage`, `Person` or an organization type on an about page, and `TechArticle`, `HowTo` or `FAQPage` on documentation. It trusts only the model's answer, at 0.9 confidence or above (`min_confidence` sets it), never a type read from the page's own markup. A page that declares a listing type is not asked for article or product markup. With `--no-classifier` it reports nothing. See [schema/expected-type](https://docs.squirrelscan.com/rules/schema/expected-type).
+
 ### Changed
 
 - `links/broken-links` says where on the page a broken internal link sits (the footer, the navigation, the comments, the page content), from landmarks and comment-thread markup. Each item also carries `meta.sections` counts.
