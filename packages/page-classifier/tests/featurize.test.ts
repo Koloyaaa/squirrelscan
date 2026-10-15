@@ -936,6 +936,67 @@ describe("text and attribute tokens (v2.3.0)", () => {
     expect(mergeTokens([], [5, 6])).toEqual([5, 6]);
   });
 
+  test("rel values are bounded at store time: first 200 characters, 8 values of 2 to 32 letters", () => {
+    const words = [
+      "alpha",
+      "bravo",
+      "charlie",
+      "delta",
+      "echo",
+      "foxtrot",
+      "golf",
+      "hotel",
+      "india",
+      "juliet",
+    ];
+    const many = tokensOfFirst(
+      `<div class="first"><a href="/x" rel="${words.join(" ")}">x</a><a href="/y">y</a></div>`,
+      "div",
+    );
+    expect(has(many, "r:hotel")).toBe(true); // the 8th value
+    expect(has(many, "r:india")).toBe(false); // the 9th
+    const far = tokensOfFirst(
+      `<div class="first"><a href="/x" rel="nofollow${" ".repeat(250)}next">x</a><a href="/y">y</a></div>`,
+      "div",
+    );
+    expect(has(far, "r:nofollow")).toBe(true);
+    expect(has(far, "r:next")).toBe(false); // past character 200
+    const long = tokensOfFirst(
+      `<div class="first"><a href="/x" rel="${"z".repeat(40)} NoFollow">x</a><a href="/y">y</a></div>`,
+      "div",
+    );
+    expect(has(long, `r:${"z".repeat(40)}`)).toBe(false); // over 32 characters
+    expect(has(long, "r:nofollow")).toBe(true); // lowercased
+  });
+
+  test("a megabyte rel, aria-label and href on a deeply nested page cost almost nothing", () => {
+    const huge = "alpha bravo charlie ".repeat(52_000); // about 1 MB
+    const depth = 430; // more candidates than MAX_CANDIDATES, every one an ancestor of the anchor
+    // the aria-label sits on the outermost div; the anchor with the huge rel and href sits innermost, inside every candidate
+    let html = `<div id="lab" aria-label="${huge}" class="d0">Some text of twenty or more characters`;
+    for (let i = 1; i < depth; i++) {
+      html += `<div class="d${i % 7}">Some text of twenty or more characters ${i} `;
+    }
+    html += `<a href="https://t.me/${"p".repeat(1_000_000)}" rel="${huge}">x</a>tail text long enough here`;
+    html += "</div>".repeat(depth);
+    const document = parseHTML(
+      `<!doctype html><html><head><title>T</title></head><body>${html}</body></html>`,
+    ).document;
+    const started = performance.now();
+    const result = featurizeDocument(document as never, URL, {});
+    const elapsed = performance.now() - started;
+    expect(result.nodes.length).toBeGreaterThanOrEqual(400);
+    expect(elapsed).toBeLessThan(100);
+    // the bounded reads still produce their tokens
+    const labelled = result.nodes.find((n) => n.elementId === "lab")!;
+    expect(has(mergeTokens(labelled.tokens, labelled.textTokens), "a:alpha")).toBe(true);
+    const unions = result.nodes.map((n) => mergeTokens(n.tokens, n.textTokens));
+    expect(unions.filter((t) => has(t, "r:alpha")).length).toBeGreaterThan(300); // rel: every ancestor, first 20 anchors
+    const hosts = unions.filter((t) => has(t, "h:telegram")).length;
+    expect(hosts).toBeGreaterThan(5); // host: only ancestors within the first 60 subtree elements (the deepest are past the candidate cap)
+    expect(hosts).toBeLessThan(80);
+  });
+
   test("masked and unmasked tokens of the new channel are deterministic", () => {
     const html = wrap(
       `<div aria-label="Search the site"><a href="https://reddit.com/r/x" rel="noopener">r</a><p>Find things here today</p></div>`,

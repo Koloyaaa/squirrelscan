@@ -57,6 +57,12 @@ const MAX_TEXT_WORDS = 12;
 const MAX_WORD_SCAN = 300;
 /** Descendant anchors (the node itself included) whose rel and host become tokens (v2.3.0). */
 const MAX_TOKEN_ANCHORS = 20;
+/** Attribute reads for the text/attribute stream are bounded when the walk stores them, never per candidate: characters of a `rel`
+ *  scanned, values kept per anchor, characters of one value, and characters of an href looked at for its host. */
+const MAX_REL_SCAN = 200;
+const MAX_REL_VALUES = 8;
+const MAX_REL_LENGTH = 32;
+const MAX_HREF_SCAN = 2048;
 /** Elements of a node's subtree (preorder, the node first) read for the subtree words (st:) and the anchor hosts (h:). */
 const MAX_SUBTREE_ELEMENTS = 60;
 
@@ -452,6 +458,20 @@ function anchorHostTag(href: string): string {
   return ANCHOR_HOST_TAGS.get(host.split(".").slice(-2).join(".")) ?? "";
 }
 
+/** The `r:` values of one anchor, bounded at store time: the first MAX_REL_SCAN characters, lowercased, split on whitespace, letters and
+ *  hyphens only, 2 to MAX_REL_LENGTH characters, at most MAX_REL_VALUES of them. A megabyte `rel` costs one 200-character slice. */
+function relValues(rel: string | null): string[] {
+  const out: string[] = [];
+  if (!rel) return out;
+  for (const raw of rel.slice(0, MAX_REL_SCAN).toLowerCase().split(/\s+/)) {
+    const value = raw.replace(/[^a-z-]/g, "");
+    if (value.length < 2 || value.length > MAX_REL_LENGTH) continue;
+    out.push(value);
+    if (out.length >= MAX_REL_VALUES) break;
+  }
+  return out;
+}
+
 const WORD_PATTERN = /\p{L}{2,24}/gu;
 
 /** The first `max` words (letters only, two or more, lowercased) of a string. */
@@ -667,7 +687,7 @@ interface Walk {
   /** Anchors with an href, as element indexes in ascending (document) order, with their lowercased rel and host tag
    *  (v2.3.0, token channel only). */
   anchors: number[];
-  anchorRel: string[];
+  anchorRel: string[][];
   anchorHost: string[];
   /** aria-label values by element index; only elements that carry one (v2.3.0). */
   ariaLabel: Map<number, string>;
@@ -1022,7 +1042,7 @@ function countAttributes(
       aria++;
       if (name === "aria-label") {
         const label = el.getAttribute(name);
-        if (label) walk.ariaLabel.set(index, label);
+        if (label) walk.ariaLabel.set(index, label.slice(0, MAX_WORD_SCAN));
       }
     }
   }
@@ -1047,8 +1067,8 @@ function countTag(walk: Walk, index: number, el: ElementLike, tag: string, host:
       walk.links[index] = 1;
       const trimmed = href.trim();
       walk.anchors.push(index);
-      walk.anchorRel.push((el.getAttribute("rel") ?? "").toLowerCase());
-      walk.anchorHost.push(anchorHostTag(trimmed));
+      walk.anchorRel.push(relValues(el.getAttribute("rel")));
+      walk.anchorHost.push(anchorHostTag(trimmed.slice(0, MAX_HREF_SCAN)));
       if (/^(mailto|tel|sms):/i.test(trimmed)) {
         walk.contactLinks[index] = 1;
         walk.externalLinks[index] = 1;
@@ -1720,10 +1740,7 @@ function emitNodeTokens(
     const inWindow = walk.anchors[k]! <= windowEnd;
     if (taken >= MAX_TOKEN_ANCHORS && !inWindow) break;
     if (taken < MAX_TOKEN_ANCHORS) {
-      for (const rel of walk.anchorRel[k]!.split(/\s+/)) {
-        const value = rel.replace(/[^a-z-]/g, "");
-        if (value.length >= 2) add(value, "r:");
-      }
+      for (const value of walk.anchorRel[k]!) add(value, "r:");
     }
     const host = walk.anchorHost[k]!;
     if (inWindow && host !== "") add(host, "h:");
