@@ -31,8 +31,9 @@ import type {
   TwitterData,
 } from "@squirrelscan/core-contracts";
 
+import { runClassifier, type ParsePageOptions } from "./classifier-hook";
 import { isInSiteChrome } from "./extractors/chrome";
-import { makeSectionResolver } from "./extractors/link-section";
+import { makeLinkSectionResolver, type LinkPlacer } from "./extractors/link-section";
 import { isHiddenFromMarkup } from "./hidden-markup";
 
 import type { AuthorInfo } from "./schema";
@@ -164,12 +165,13 @@ export function extractTwitter(doc: Document): TwitterData {
   };
 }
 
-// Extract links from parsed document
-export function extractLinks(doc: Document, baseUrl: string): LinkData[] {
+// Extract links from parsed document. `placeLink` is the page classifier's placer when the caller
+// ran it: it fills in `section` where the markup says nothing (see ./extractors/link-section.ts).
+export function extractLinks(doc: Document, baseUrl: string, placeLink?: LinkPlacer): LinkData[] {
   const anchors = doc.querySelectorAll("a[href]");
   const links: LinkData[] = [];
   const baseUrlObj = new URL(baseUrl);
-  const sectionOf = makeSectionResolver();
+  const sectionOf = makeLinkSectionResolver(placeLink);
 
   const shouldSkip = (href: string): boolean => {
     return shouldSkipUrl(href);
@@ -194,7 +196,7 @@ export function extractLinks(doc: Document, baseUrl: string): LinkData[] {
       // matters. Cheap: an ancestor tagName walk, no attribute reads.
       const isChrome = isInSiteChrome(anchor as Element);
 
-      links.push({ url, text, isInternal, isChrome, section: sectionOf(anchor as Element) });
+      links.push({ url, text, isInternal, isChrome, ...sectionOf(anchor as Element) });
     } catch {
       // Skip invalid URLs
       links.push({
@@ -474,9 +476,13 @@ function simpleHash(str: string): string {
 }
 
 // Parse all data from HTML - parses ONCE, reuses document for all extractors
-export function parsePage(html: string, url: string): ParsedPage {
+export function parsePage(html: string, url: string, options?: ParsePageOptions): ParsedPage {
   // Single DOM parse - this document is reused by all extractors and available to rules
   const { document: doc } = parseHTML(html);
+
+  // The page classifier, when the caller supplied one (#2307): it reads the DOM once, before
+  // anything else touches it, and its placer fills in link sections the markup leaves unknown.
+  const classified = runClassifier(options?.classify, doc, url, html);
 
   // Parse schemas (new rich collection)
   const schemas = parseSchemas(doc);
@@ -505,7 +511,7 @@ export function parsePage(html: string, url: string): ParsedPage {
     h1: extractH1(doc),
     og: extractOG(doc),
     twitter: extractTwitter(doc),
-    links: extractLinks(doc, url),
+    links: extractLinks(doc, url, classified?.placeLink),
     contactLinks: extractContactLinks(doc),
     images: extractImages(doc, url),
     headings: extractHeadings(doc),
@@ -523,6 +529,9 @@ export function parsePage(html: string, url: string): ParsedPage {
     visibleDateModified: visibleMeta.visibleDateModified,
 
     hreflangAlternates: extractHreflangAlternates(doc, url),
+
+    // Present only when the classifier ran, so a parse without one is byte-identical to before.
+    ...(classified ? { classification: classified.classification } : {}),
 
     // Legacy (deprecated)
     schema,

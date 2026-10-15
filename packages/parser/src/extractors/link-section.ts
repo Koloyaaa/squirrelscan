@@ -11,6 +11,7 @@
 //
 // The walk is memoised per element: a footer with 300 links reads the footer's attributes once.
 
+import type { ClassifierSource } from "@squirrelscan/core-contracts";
 import type { Element } from "linkedom";
 
 import type { LinkSection } from "./types";
@@ -77,4 +78,130 @@ export function makeSectionResolver(): (element: Element) => LinkSection {
 /** One-off convenience; use {@link makeSectionResolver} when resolving many anchors of a page. */
 export function linkSectionOf(element: Element): LinkSection {
   return makeSectionResolver()(element);
+}
+
+// ---------------------------------------------------------------------------
+// The page classifier as a second source (#2307).
+//
+// The markup above answers first. Where it is silent, a caller that ran the page classifier can
+// supply a placer and the model fills the gap. The parser takes the placer as a plain function so
+// it never depends on the classifier (or its artifact): anything shaped like `elementPlacer`'s
+// result works.
+// ---------------------------------------------------------------------------
+
+/** One answer of a placer: a label, how sure, and who gave it. Structural on purpose. */
+export interface PlacedLabel {
+  label: string;
+  confidence: number;
+  source: ClassifierSource;
+}
+
+/** Where the classifier puts one element: the region around it and the section purpose it sits in. */
+export interface LinkPlacement {
+  region: PlacedLabel | null;
+  section: PlacedLabel | null;
+}
+
+/** Place one anchor on the page, or null when the classifier has nothing to say. */
+export type LinkPlacer = (element: Element) => LinkPlacement | null;
+
+/** A link's section with its provenance. `sectionSource` is set only for a model answer. */
+export interface ResolvedLinkSection {
+  section: LinkSection;
+  sectionSource?: ClassifierSource;
+  sectionConfidence?: number;
+}
+
+// Section purposes the model may name for a link. Comment threads are separate: see COMMENT_LABELS.
+const PURPOSE_SECTION: Readonly<Record<string, LinkSection>> = {
+  pagination: "pagination",
+  breadcrumbs: "breadcrumbs",
+  related_content: "related_content",
+  business_info: "business_info",
+  social_share: "social_share",
+  account_login: "account_login",
+  author_byline: "author_byline",
+  newsletter_signup: "newsletter_signup",
+};
+
+// The classifier's comment threads are read from markup (its `comments` rule, source "rules"). Its
+// section head also has a comments class, which the audits found far too unreliable to name a
+// link's place, so a comments answer counts only when it comes from the rule. This is the one
+// answer whose source matters; everything else is taken at its label and confidence.
+const COMMENT_LABELS: ReadonlySet<string> = new Set(["comments", "reviews"]);
+
+// Region answers that name a link section. `site_chrome` (furniture, which of the four unsure),
+// form, search and dialog name no part of the page a finding could quote, so they stay unknown.
+const REGION_SECTION: Readonly<Record<string, LinkSection>> = {
+  site_header: "header",
+  footer: "footer",
+  navigation: "navigation",
+  sidebar: "sidebar",
+  main_content: "content",
+  content_block: "content",
+  article_chrome: "content",
+};
+
+/** Sections the markup names for certain: furniture landmarks and comment threads. */
+const MARKUP_FINAL: ReadonlySet<LinkSection> = new Set([
+  "header",
+  "footer",
+  "navigation",
+  "sidebar",
+  "comments",
+]);
+
+/**
+ * Combine the markup's answer with the classifier's, for one anchor.
+ *
+ * Precedence: a landmark or comment thread in the markup wins outright (the placer is not asked).
+ * Otherwise a section purpose (pagination, related content, ...) beats the markup's weak
+ * `content` (inside `<main>`/`<article>`, where those blocks usually sit), and a region fills a
+ * markup `unknown`. The answer's `source` is carried through to be displayed; the only place it
+ * decides anything is the comments exception above.
+ */
+export function mergeLinkSection(
+  markup: LinkSection,
+  place: () => LinkPlacement | null,
+): ResolvedLinkSection {
+  if (MARKUP_FINAL.has(markup)) return { section: markup };
+  let placement: LinkPlacement | null;
+  try {
+    placement = place();
+  } catch {
+    return { section: markup };
+  }
+  if (!placement) return { section: markup };
+  const named = placement.section;
+  const purpose = named
+    ? COMMENT_LABELS.has(named.label)
+      ? named.source === "rules"
+        ? "comments"
+        : undefined
+      : PURPOSE_SECTION[named.label]
+    : undefined;
+  if (purpose && named) return answer(purpose, named);
+  if (markup === "unknown" && placement.region) {
+    const region = REGION_SECTION[placement.region.label];
+    if (region) return answer(region, placement.region);
+  }
+  return { section: markup };
+}
+
+function answer(section: LinkSection, from: PlacedLabel): ResolvedLinkSection {
+  return from.source === "model"
+    ? { section, sectionSource: "model", sectionConfidence: from.confidence }
+    : { section };
+}
+
+/**
+ * Make a per-document resolver for the link extractors. Without a placer this is the markup rule
+ * alone, bit for bit what `makeSectionResolver` gives.
+ */
+export function makeLinkSectionResolver(
+  placeLink?: LinkPlacer,
+): (element: Element) => ResolvedLinkSection {
+  const markup = makeSectionResolver();
+  if (!placeLink) return (element) => ({ section: markup(element) });
+  return (element) => mergeLinkSection(markup(element), () => placeLink(element));
 }

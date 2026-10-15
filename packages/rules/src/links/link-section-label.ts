@@ -2,7 +2,11 @@
 
 import type { LinkSection } from "@squirrelscan/core-contracts";
 
-/** How an item reads: "in the footer", "in the article body", ... */
+/**
+ * How an item reads: "in the footer", "in the page content", "in the pagination", ... The first
+ * six come from page markup; the rest are section purposes the page classifier names where the
+ * markup says nothing.
+ */
 const PHRASE: Record<Exclude<LinkSection, "unknown">, string> = {
   header: "the header",
   footer: "the footer",
@@ -10,6 +14,14 @@ const PHRASE: Record<Exclude<LinkSection, "unknown">, string> = {
   sidebar: "the sidebar",
   comments: "the comments",
   content: "the page content",
+  pagination: "the pagination",
+  breadcrumbs: "the breadcrumbs",
+  related_content: "a related-content block",
+  business_info: "the business details",
+  social_share: "the social sharing links",
+  account_login: "the account and login links",
+  author_byline: "the author byline",
+  newsletter_signup: "the newsletter signup",
 };
 
 export type SectionCounts = Partial<Record<Exclude<LinkSection, "unknown">, number>>;

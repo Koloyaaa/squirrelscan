@@ -17,7 +17,7 @@
 import type { ContactLinkData } from "@squirrelscan/core-contracts";
 
 import { parseHtmlForRules } from "@squirrelscan/audit-engine";
-import { parsePage } from "@squirrelscan/parser";
+import { parsePage, type PageClassifierHook } from "@squirrelscan/parser";
 import { describe, expect, test } from "bun:test";
 
 import type { PageRecord } from "../../src/crawler/storage/types";
@@ -131,6 +131,70 @@ describe("ParsedPage producer parity — isChrome", () => {
         ["https://example.com/body", false],
         ["https://example.com/legal", true],
       ]);
+    }
+  });
+});
+
+// #2307 — the page classifier hook reaches every producer: a model-filled `section` and the page's
+// `classification` must come out the same from all three, and not at all when no hook is passed.
+const SECTION_HTML = `<!DOCTYPE html><html><head><title>t</title></head><body>
+<footer><a href="/legal">legal</a></footer>
+<div><a href="/older">older</a></div>
+</body></html>`;
+
+function sectionRecord(): PageRecord {
+  return { ...pageRecord(), html: SECTION_HTML } as PageRecord;
+}
+
+const classify: PageClassifierHook = () => ({
+  classification: {
+    pageType: { label: "article", confidence: 0.9, source: "model" },
+    degraded: "",
+  },
+  placeLink: () => ({
+    region: null,
+    section: { label: "pagination", confidence: 0.96, source: "model" },
+  }),
+});
+
+describe("ParsedPage producer parity — classifier", () => {
+  test("all three producers fill the silence, keep markup, and store the classification", () => {
+    const produced = [
+      parsePage(SECTION_HTML, URL, { classify }),
+      parseHtmlForRules(SECTION_HTML, URL, { classify }),
+      parsePageRecord(sectionRecord(), { classify })!,
+    ];
+    for (const parsed of produced) {
+      expect(
+        parsed.links.map((l) => [
+          l.url,
+          l.section,
+          l.sectionSource,
+          l.sectionConfidence,
+        ])
+      ).toEqual([
+        ["https://example.com/legal", "footer", undefined, undefined],
+        ["https://example.com/older", "pagination", "model", 0.96],
+      ]);
+      expect(parsed.classification).toEqual({
+        pageType: { label: "article", confidence: 0.9, source: "model" },
+        degraded: "",
+      });
+    }
+  });
+
+  test("without a hook none of them carries the extra keys", () => {
+    const produced = [
+      parsePage(SECTION_HTML, URL),
+      parseHtmlForRules(SECTION_HTML, URL),
+      parsePageRecord(sectionRecord())!,
+    ];
+    for (const parsed of produced) {
+      expect("classification" in parsed).toBe(false);
+      for (const link of parsed.links) {
+        expect("sectionSource" in link).toBe(false);
+        expect("sectionConfidence" in link).toBe(false);
+      }
     }
   });
 });

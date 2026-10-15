@@ -20,11 +20,14 @@ import {
   isSameDomainScript,
   parseDocument,
   parseSchemas,
+  runClassifier,
   schemaCollectionFromJSON,
   EMPTY_SCHEMA_COLLECTION,
   extractAuthorFromSchema,
   extractVisibleMeta,
+  toLinkData,
   type ParsedPageCache,
+  type ParsePageOptions,
 } from "@squirrelscan/parser";
 import {
   buildCollectedPageSignal,
@@ -375,15 +378,21 @@ export function ensureSiteContextDocuments(siteContext: SiteContextPage[]): void
  * linkedom Document can't cross a worker seam). Keeping ONE parse path is what
  * guarantees pooled execution stays byte-identical to serial.
  */
-export function parseHtmlForRules(html: string, baseUrl: string): ParsedPage {
+export function parseHtmlForRules(
+  html: string,
+  baseUrl: string,
+  options?: ParsePageOptions,
+): ParsedPage {
   const doc = parseDocument(html);
+  // The page classifier, when the caller supplied one (#2307): same hook `parsePage` takes.
+  const classified = runClassifier(options?.classify, doc, baseUrl, html);
 
   const meta = extractMeta(doc);
   const og = extractOG(doc);
   const twitter = extractTwitter(doc);
   const headings = extractHeadings(doc);
   const content = extractContent(doc, html);
-  const links = extractLinks(doc, baseUrl);
+  const links = extractLinks(doc, baseUrl, classified?.placeLink);
   const images = extractImages(doc, baseUrl);
 
   // Parse schemas (new rich collection)
@@ -408,15 +417,7 @@ export function parseHtmlForRules(html: string, baseUrl: string): ParsedPage {
     headings,
     content,
     h1: { count: headings.h1Count, texts: headings.h1Texts },
-    links: links.map((l) => ({
-      url: l.href,
-      text: l.text,
-      isInternal: l.isInternal,
-      rel: l.rel,
-      isNofollow: l.isNofollow,
-      isChrome: l.isChrome,
-      section: l.section,
-    })),
+    links: links.map(toLinkData),
     // tel:/mailto: anchors, which `extractLinks` drops as non-crawlable. This is
     // the parse path production actually runs (parsePageRecord + the #263 page-rule
     // workers), so a field populated only by `parsePage` would be invisible live.
@@ -438,6 +439,8 @@ export function parseHtmlForRules(html: string, baseUrl: string): ParsedPage {
     visibleAuthor: visibleMeta.visibleAuthor,
     visibleDatePublished: visibleMeta.visibleDatePublished,
     visibleDateModified: visibleMeta.visibleDateModified,
+    // Present only when the classifier ran (#2307).
+    ...(classified ? { classification: classified.classification } : {}),
     // Legacy (deprecated)
     schema,
   };
@@ -446,12 +449,12 @@ export function parseHtmlForRules(html: string, baseUrl: string): ParsedPage {
 /**
  * Parse a page record to extract structured data for rules
  */
-export function parsePageRecord(page: PageRecord): ParsedPage | null {
+export function parsePageRecord(page: PageRecord, options?: ParsePageOptions): ParsedPage | null {
   if (!page.html) return null;
 
   return logger.withTrace(
     "parsePageRecord",
-    () => parseHtmlForRules(page.html!, page.url),
+    () => parseHtmlForRules(page.html!, page.url, options),
     () => ({ url: page.url, htmlLen: page.html!.length }),
   );
 }

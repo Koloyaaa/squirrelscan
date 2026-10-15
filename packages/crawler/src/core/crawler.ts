@@ -17,7 +17,12 @@ import { auditFailureDetail } from "@squirrelscan/core-contracts/failure-reason"
 import { COVERAGE_PAGE_LIMITS, REPORT_LIMITS } from "@squirrelscan/core-contracts/limits";
 
 import { extractCrawlableUrls } from "@squirrelscan/parser/extractors";
-import { parseDocument, parsePage, type ParsedPageCache } from "@squirrelscan/parser";
+import {
+  parseDocument,
+  parsePage,
+  type PageClassifierHook,
+  type ParsedPageCache,
+} from "@squirrelscan/parser";
 import { findClientRedirects } from "@squirrelscan/utils/client-redirects";
 import {
   DEFAULT_MAX_DOCUMENT_BODY_BYTES,
@@ -407,6 +412,12 @@ export interface CreateCrawlerOptions {
   storage?: CrawlStorage;
   // Opt-in: retains each crawl-time ParsedPage so a same-process audit skips re-parse (#267)
   parsedPageCache?: ParsedPageCache;
+  /**
+   * Opt-in: run the page classifier on every parsed page (#2307). It fills `LinkData.section`
+   * where the markup is silent and stores the page type on the parsed page. Absent = markup rules
+   * only, exactly as before.
+   */
+  classify?: PageClassifierHook;
   // Opt-in: injectable fetch seam; defaults to the real fetchPageWithRetry (#315)
   fetcher?: CrawlFetcher;
   /**
@@ -1691,7 +1702,7 @@ export function createCrawler(
             (!result.contentType && looksLikeHtml(result.body))
           ) {
             // Parse page data once (includes parseDocument internally)
-            const parsed = parsePage(result.body, result.finalUrl);
+            const parsed = parsePage(result.body, result.finalUrl, { classify: options.classify });
 
             // Retain the live ParsedPage so a same-process audit reuses its
             // DOM (#267) — capped: each retained DOM costs MBs for the rest

@@ -1452,7 +1452,10 @@ export interface SchemaData {
 
 /**
  * Which part of a page an anchor sits in, for findings ("broken link in the footer"). Landmark tags
- * and ARIA roles plus a markup-only comment-thread rule (parser `link-section.ts`).
+ * and ARIA roles plus a markup-only comment-thread rule (parser `link-section.ts`) answer first.
+ * Where the markup says nothing, the page classifier fills in: the section purposes after
+ * `unknown` below come from its section head, and a region answer can name header, footer,
+ * navigation, sidebar or content. `comments` is never a model answer.
  */
 export type LinkSection =
   | "header"
@@ -1461,7 +1464,39 @@ export type LinkSection =
   | "sidebar"
   | "comments"
   | "content"
-  | "unknown";
+  | "unknown"
+  | "pagination"
+  | "breadcrumbs"
+  | "related_content"
+  | "business_info"
+  | "social_share"
+  | "account_login"
+  | "author_byline"
+  | "newsletter_signup";
+
+/** Where an answer came from: the page's markup (`rules`) or the page classifier's model. */
+export type ClassifierSource = "rules" | "model";
+
+/**
+ * The page classifier's page type answer. A different label space from `ParsedPage.pageType`
+ * (schema and URL based): homepage, product_detail, product_listing, article, blog_post, about,
+ * contact, docs, legal, pricing, listing_index, other, or `unknown` when nothing answered.
+ */
+export interface ClassifiedPageType {
+  label: string;
+  confidence: number;
+  source: ClassifierSource;
+}
+
+/**
+ * What the page classifier said about one page. Absent when the classifier was off or this parse
+ * was stored before it existed; readers treat absent as "not classified".
+ */
+export interface PageClassification {
+  pageType: ClassifiedPageType;
+  /** Why any part of the page fell back to the rules path, or "" when nothing did. */
+  degraded: string;
+}
 
 export interface LinkData {
   url: string;
@@ -1484,6 +1519,13 @@ export interface LinkData {
    * omit it; readers treat `undefined` as unknown and say nothing about placement.
    */
   section?: LinkSection;
+  /**
+   * Who answered `section` when the page classifier did, "model"; absent means the markup rules
+   * did (or the section is unknown). Stored compactly: one key per link only when it matters.
+   */
+  sectionSource?: ClassifierSource;
+  /** The classifier's confidence in `section`; present only with a `model` source. */
+  sectionConfidence?: number;
 }
 
 /**
@@ -1741,6 +1783,12 @@ export interface ParsedPage {
    * must treat absent as "not extracted", which exempts nothing.
    */
   hreflangAlternates?: HreflangAlternate[];
+  /**
+   * The page classifier's answer for this page: page type and why it degraded, when it ran. Absent
+   * when it did not (`--no-classifier`, `classifier.enabled = false`, or a parse stored before it
+   * existed). `pageType` above is the schema and URL based label; this is the model's.
+   */
+  classification?: PageClassification;
 }
 
 /** The crawler's name for an audit level: quick, surface or full (see audit-levels.ts). */
