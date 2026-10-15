@@ -148,22 +148,24 @@ const REGION_SECTION: Readonly<Record<string, LinkSection>> = {
   article_chrome: "content",
 };
 
-/** Sections the markup names for certain: furniture landmarks and comment threads. */
-const MARKUP_FINAL: ReadonlySet<LinkSection> = new Set([
-  "header",
-  "footer",
-  "navigation",
-  "sidebar",
-  "comments",
-]);
+/** Sections the markup names for certain: the site's header and footer, and comment threads. */
+const MARKUP_FINAL: ReadonlySet<LinkSection> = new Set(["header", "footer", "comments"]);
+
+/**
+ * Landmarks a model section purpose may refine: a `nav` that is the pagination or the breadcrumbs
+ * reads "the pagination" or "the breadcrumbs", and a related-posts `aside` reads "a related-content
+ * block". Only a purpose does: a region answer never replaces them, and a comments answer is
+ * ignored (a thread inside furniture is the furniture, as in the markup rule).
+ */
+const MARKUP_REFINABLE: ReadonlySet<LinkSection> = new Set(["navigation", "sidebar"]);
 
 /**
  * Combine the markup's answer with the classifier's, for one anchor.
  *
- * Precedence: a landmark or comment thread in the markup wins outright (the placer is not asked).
- * Otherwise a section purpose (pagination, related content, ...) beats the markup's weak
- * `content` (inside `<main>`/`<article>`, where those blocks usually sit), and a region fills a
- * markup `unknown`. The answer's `source` is carried through to be displayed; the only place it
+ * Precedence: the site's header or footer and comment threads in the markup win outright (the
+ * placer is not asked). A section purpose (pagination, breadcrumbs, related content, ...) refines a
+ * navigation or sidebar landmark and beats the markup's weak `content` (inside `<main>` or
+ * `<article>`, where those blocks usually sit); a region fills a markup `unknown`. The answer's `source` is carried through to be displayed; the only place it
  * decides anything is the comments exception above.
  */
 export function mergeLinkSection(
@@ -182,6 +184,10 @@ export function mergeLinkSection(
   // alone would have said "content".
   if (placement.truncated) return { section: markup === "content" ? "unknown" : markup };
   const named = placement.section;
+  if (MARKUP_REFINABLE.has(markup)) {
+    const refined = named ? PURPOSE_SECTION[named.label] : undefined;
+    return refined && named ? answer(refined, named) : { section: markup };
+  }
   const purpose = named
     ? COMMENT_LABELS.has(named.label)
       ? named.source === "rules"

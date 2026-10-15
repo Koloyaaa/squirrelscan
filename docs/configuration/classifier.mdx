@@ -4,14 +4,14 @@ icon: "sparkles"
 description: "Switch the bundled page classifier on or off: it names which part of a page a link sits in where the markup says nothing"
 ---
 
-The `[classifier]` section controls the page classifier, a small model called Treetop that is bundled with squirrel.
+The `[classifier]` section controls the page classifier, a small model that is bundled with squirrel.
 
 ## What it does
 
 When a finding names a link, squirrel can say where on the page that link sits: the footer, the navigation, the pagination, a related-content block. Most of that comes from the page's own markup (landmark tags, ARIA roles, comment threads). Plenty of pages have none of it, so the classifier looks at the page structure and fills the gap.
 
 - It runs on your machine. There is no network call and no credit cost.
-- The markup always wins. A landmark or a comment thread in the page is never overridden, and comment threads are only ever read from markup.
+- The markup wins for the header, the footer and comment threads, which are never overridden, and comment threads are only ever read from markup. A section the classifier names (the pagination, the breadcrumbs) refines a navigation or sidebar landmark.
 - It answers only when it is confident, using a per-class bar chosen for precision. An unsure link keeps no section.
 - It also stores a page type for each page (article, product, docs, legal and so on) for later rules.
 - The model is about 9 MB, loaded the first time a page is classified. Commands that never audit never read it.
@@ -48,6 +48,7 @@ The classifier is a model, and models guess. It answers only when it is confiden
 - A "follow us" row of profile icons can read as social sharing links.
 - The comments label comes from page markup only. A comment thread built with unusual class names or ids is not recognised, and the model never names one.
 - On pages with good markup it rarely speaks, because the markup has already answered.
+- Pages served from the crawl cache keep the sections stored when they were last fetched, until they are fetched again. An audit that reuses unchanged pages therefore shows the old sections for them.
 
 A wrong phrase never hides a broken link. It only changes the words that say where the link sits.
 

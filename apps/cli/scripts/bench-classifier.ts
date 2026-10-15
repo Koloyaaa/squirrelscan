@@ -139,6 +139,9 @@ if (process.argv.includes("--stripped")) {
 
 let degraded = 0;
 let withModel = 0;
+// links whose section the classifier changed, as `markup section -> section`
+const changed: Record<string, number> = {};
+let links = 0;
 const off: number[] = [];
 const on: number[] = [];
 const delta: number[] = [];
@@ -147,7 +150,7 @@ for (const { url, html } of samples) {
   let bestOn = Number.POSITIVE_INFINITY;
   for (let round = 0; round < rounds; round++) {
     let t = performance.now();
-    parsePage(html, url);
+    const plain = parsePage(html, url);
     bestOff = Math.min(bestOff, performance.now() - t);
     t = performance.now();
     const parsed = parsePage(html, url, { classify });
@@ -156,6 +159,15 @@ for (const { url, html } of samples) {
       if (parsed.classification?.degraded) degraded++;
       if (parsed.links.some((link) => link.sectionSource === "model"))
         withModel++;
+      parsed.links.forEach((link, i) => {
+        links++;
+        const before = plain.links[i]?.section ?? "unknown";
+        const after = link.section ?? "unknown";
+        if (before !== after) {
+          const key = `${before} -> ${after}`;
+          changed[key] = (changed[key] ?? 0) + 1;
+        }
+      });
     }
   }
   off.push(bestOff);
@@ -177,3 +189,10 @@ console.log(row("classifier overhead", delta));
 console.log(
   `degraded pages: ${degraded}; pages with a model-named link section: ${withModel}`
 );
+const moved = Object.values(changed).reduce((a, b) => a + b, 0);
+console.log(`links: ${links}; sections the classifier changed: ${moved}`);
+for (const [key, count] of Object.entries(changed).sort(
+  (a, b) => b[1] - a[1]
+)) {
+  console.log(`  ${key.padEnd(28)}${String(count).padStart(6)}`);
+}

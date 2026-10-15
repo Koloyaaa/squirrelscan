@@ -56,15 +56,15 @@ describe("link section from the classifier", () => {
     expect("classification" in parsed).toBe(false);
   });
 
-  test("markup wins: a landmark or comment thread is never asked or overridden", () => {
+  test("markup wins: the header, the footer and a comment thread are never asked or overridden", () => {
     const calls: string[] = [];
     const out = links(
-      `<footer><a href="/f">f</a></footer><nav><a href="/n">n</a></nav>` +
+      `<footer><a href="/f">f</a></footer><header><nav><a href="/h">h</a></nav></header>` +
         `<main><div id="comments"><a href="/c">c</a></div></main>`,
       hookFor(
         {
           f: { section: model("pagination") },
-          n: { section: model("breadcrumbs") },
+          h: { section: model("breadcrumbs") },
           c: { section: model("related_content") },
         },
         calls,
@@ -72,10 +72,34 @@ describe("link section from the classifier", () => {
     );
     expect(out.map((l) => [l.text, l.section, l.sectionSource])).toEqual([
       ["f", "footer", undefined],
-      ["n", "navigation", undefined],
+      ["h", "header", undefined],
       ["c", "comments", undefined],
     ]);
     expect(calls).toEqual([]);
+  });
+
+  test("a section purpose refines a navigation or sidebar landmark; nothing else does", () => {
+    const out = links(
+      `<nav><a href="/p">p</a></nav><nav><a href="/b">b</a></nav><aside><a href="/r">r</a></aside>` +
+        `<nav><a href="/x">x</a></nav><aside><a href="/y">y</a></aside><nav><a href="/z">z</a></nav>`,
+      hookFor({
+        p: { section: model("pagination", 0.96) },
+        b: { section: model("breadcrumbs", 0.9) },
+        r: { section: model("related_content", 0.8) },
+        // A region answer, a comments answer and a rule-sourced answer do not refine a landmark.
+        x: { region: model("content_block", 0.99) },
+        y: { section: model("comments", 0.99) },
+        z: { section: { label: "reviews", confidence: 1, source: "rules" } },
+      }),
+    );
+    expect(out.map((l) => [l.text, l.section, l.sectionSource, l.sectionConfidence])).toEqual([
+      ["p", "pagination", "model", 0.96],
+      ["b", "breadcrumbs", "model", 0.9],
+      ["r", "related_content", "model", 0.8],
+      ["x", "navigation", undefined, undefined],
+      ["y", "sidebar", undefined, undefined],
+      ["z", "navigation", undefined, undefined],
+    ]);
   });
 
   test("the model fills a markup unknown from its region answer", () => {

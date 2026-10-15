@@ -5,7 +5,7 @@ What the bundled page classifier costs, and what it adds to link findings
 parses it, and names the part of the page a link sits in where the markup
 says nothing. The model ships inside the executable.
 
-Machine: 16 GB Apple M2, macOS 15, other work running (load average 3 to 5,
+Machine: 16 GB Apple M2, macOS 15, other work running (load average 4 to 7,
 swap nearly full), so absolute milliseconds are inflated. Compare the paired
 rows. Bun 1.3.14. Artifact: the v2.3.0 featurizer's, 8.8 MB, with the region,
 page type and section heads (pagination bar .80, social_share .85).
@@ -19,10 +19,10 @@ kept. The model is loaded before timing starts and reported on its own.
 
 | pages | HTML size | without, p50 / p95 | with, p50 / p95 | overhead p50 / p95 / max |
 |---|---|---|---|---|
-| 100 synthetic (`packages/synthetic-site`) | p50 58 KB, max 78 KB | 1.9 / 2.6 | 4.5 / 6.1 | 2.5 / 3.4 / 4.4 |
-| 117 real pages from squirrelscan's own public sites | p50 106 KB, max 415 KB | 7.5 / 24.8 | 21.9 / 76.3 | 14.2 / 53.1 / 59.4 |
+| 100 synthetic (`packages/synthetic-site`) | p50 58 KB, max 78 KB | 2.1 / 3.9 | 5.0 / 9.7 | 2.8 / 6.8 / 13.8 |
+| 117 real pages from squirrelscan's own public sites | p50 106 KB, max 415 KB | 7.7 / 25.2 | 22.8 / 81.2 | 14.2 / 55.9 / 63.6 |
 
-Model load is 12 to 14 ms, once, on the first classified page (19 ms in `squirrel self doctor`). No page hit the
+Model load is 12 to 14 ms, once, on the first classified page (19 to 31 ms in `squirrel self doctor`). No page hit the
 500 ms per-page budget.
 
 ## Whole audit
@@ -32,11 +32,11 @@ Model load is 12 to 14 ms, once, on the first classified page (19 ms in `squirre
 
 | classifier | min | median |
 |---|---|---|
-| off (`--no-classifier`) | 3.78 s | 3.88 s |
-| on | 3.92 s | 4.08 s |
+| off (`--no-classifier`) | 4.25 s | 4.69 s |
+| on | 4.72 s | 4.89 s |
 
-About 1.5 to 2 ms a page on these pages, in line with the per-page overhead
-above. Real sites are fetch-bound, so the classifier is a small share of an
+A 0.2 to 0.5 s difference on 100 pages (an earlier run on a quieter machine read
+0.14 to 0.20 s), in line with the per-page overhead above. Real sites are fetch-bound, so the classifier is a small share of an
 audit. A single round on a busier machine read +1 s; interleave and repeat.
 
 ## Binary and startup
@@ -72,5 +72,13 @@ markup could not: 64 pagination links that the markup called navigation.
 | navigation | 37 | 1 | 64 | 0 | 10,718 |
 | sidebar | 0 | 0 | 0 | 31 | 10,698 |
 
+## What it changes in findings
+
+A model section purpose refines a `nav` or `aside` landmark; the header, the
+footer and comment threads stay with the markup. On the 117 real pages (26,371
+links) the classifier changed the section of 64 links, all from navigation to
+pagination, on 32 pages. It changed no other link. On the 100 synthetic pages it
+changed none.
+
 Re-run the three modes (`--dir`, no flag, `--stripped`) whenever the artifact is
-swapped.
+swapped. The default mode prints these counts.
