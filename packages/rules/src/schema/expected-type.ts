@@ -233,10 +233,12 @@ export const expectedTypeSchemaRule: Rule = {
     }
 
     const declared = declaredTypes(ctx);
-    const confidence = pageType.confidence.toFixed(2);
+    // The confidence lives in `details`, not the message: reports group findings by
+    // message, and a per-page confidence in it would split one finding per page type
+    // into one group per confidence value.
     const details = {
       pageType: pageType.label,
-      confidence: Number(confidence),
+      confidence: Number(pageType.confidence.toFixed(2)),
       expected: family.wanted,
       declared: [...declared.values()],
     };
@@ -269,7 +271,7 @@ export const expectedTypeSchemaRule: Rule = {
     checks.push({
       name: "expected-type",
       status: "fail",
-      message: `Reads as ${withArticle(family.noun)} (classifier ${confidence}) but declares no ${family.wanted} structured data`,
+      message: `Reads as ${withArticle(family.noun)} but declares no ${family.wanted} structured data`,
       details,
     });
     return { checks };
