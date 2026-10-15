@@ -15,6 +15,8 @@
 
 import { getAttrCI, hasAttrCI } from "@squirrelscan/utils";
 
+import type { CheckResult } from "../types";
+
 export type StaticVisibility = { state: "shown" } | { state: "hidden" } | { state: "unknown" };
 
 /** Item label for a control reported as unconfirmed. */
@@ -24,6 +26,13 @@ export const UNCONFIRMED_LABEL =
 export interface StaticVisibilityOptions {
   /** Count `aria-hidden="true"` on the element or an ancestor as hidden. */
   ariaHidden: boolean;
+  /**
+   * Treat a closed `<dialog>` as shown (pub#671). For a check of the dialog
+   * itself: a native dialog is served closed and opened by script, so its
+   * name is checked as it will be once open. Hiding it any other way still
+   * counts.
+   */
+  closedDialogsShown?: boolean;
 }
 
 export interface StaticVisibilityResolver {
@@ -128,7 +137,7 @@ function tagOf(el: Element): string {
  * stay rendered in Chromium, and none of these rules reach SVG or MathML
  * elements (pub#675 review, checked in Chromium).
  */
-function uaHidden(el: Element, foreign: boolean): boolean {
+function uaHidden(el: Element, foreign: boolean, closedDialogsShown: boolean): boolean {
   const tag = tagOf(el);
   if (foreign || tag === "svg" || tag === "math" || tag === "embed" || tag === "marquee") {
     return false;
@@ -136,7 +145,7 @@ function uaHidden(el: Element, foreign: boolean): boolean {
   const hidden = getAttrCI(el, "hidden");
   // Keyword match without trimming: " until-found " is not the keyword.
   if (hidden !== null && asciiLower(hidden) !== "until-found") return true;
-  if (tag === "dialog") return !hasAttrCI(el, "open");
+  if (tag === "dialog") return !closedDialogsShown && !hasAttrCI(el, "open");
   return tag === "template" || hasAttrCI(el, "popover");
 }
 
@@ -279,7 +288,8 @@ export function createStaticVisibility(options: StaticVisibilityOptions): Static
     // An author `display` beats the user-agent rule.
     const display = ariaHidden
       ? "none"
-      : (inline.display ?? (uaHidden(el, parent.foreign) ? "none" : "shown"));
+      : (inline.display ??
+        (uaHidden(el, parent.foreign, options.closedDialogsShown === true) ? "none" : "shown"));
 
     const treeUnreliable = parent.treeUnreliable || treeMayDiffer(el);
     const foreign = parent.foreign || tagOf(el) === "svg" || tagOf(el) === "math";
@@ -333,5 +343,60 @@ export function createStaticVisibility(options: StaticVisibilityOptions): Static
       }
       return (last as Resolved).verdict;
     },
+  };
+}
+
+/**
+ * A naming rule's unnamed controls, sorted by whether the rule applies to them
+ * (pub#665, pub#671): out of the accessibility tree they are only counted,
+ * possibly hidden by an inline style they are unconfirmed, and the rest fail.
+ */
+export interface UnnamedControls<T> {
+  /** Files one unnamed control under the finding it belongs to. */
+  add(el: Element, item: T): void;
+  readonly failures: T[];
+  readonly unconfirmed: T[];
+  /** Unnamed, but out of the accessibility tree. They need a name if shown later. */
+  readonly hidden: number;
+}
+
+export function sortUnnamedControls<T>(
+  visibility: StaticVisibilityResolver = createStaticVisibility({ ariaHidden: true }),
+): UnnamedControls<T> {
+  const failures: T[] = [];
+  const unconfirmed: T[] = [];
+  let hidden = 0;
+  return {
+    add(el: Element, item: T): void {
+      const seen = visibility.visibility(el);
+      if (seen.state === "hidden") hidden++;
+      else if (seen.state === "unknown") unconfirmed.push(item);
+      else failures.push(item);
+    },
+    failures,
+    unconfirmed,
+    get hidden() {
+      return hidden;
+    },
+  };
+}
+
+/**
+ * The warn row for controls an inline style may hide, named `<check>-unconfirmed`.
+ * `what` completes "N <what> may be hidden by an inline style (unconfirmed)".
+ */
+export function unconfirmedRow(
+  check: string,
+  what: string,
+  items: Array<string | { id: string; snippet?: string }>,
+): CheckResult {
+  return {
+    name: `${check}-unconfirmed`,
+    status: "warn",
+    message: `${items.length} ${what} may be hidden by an inline style (unconfirmed)`,
+    items: items
+      .slice(0, 10)
+      .map((item) => ({ ...(typeof item === "string" ? { id: item } : item), label: UNCONFIRMED_LABEL })),
+    ...(items.length > 10 ? { details: { additional: items.length - 10 } } : {}),
   };
 }
