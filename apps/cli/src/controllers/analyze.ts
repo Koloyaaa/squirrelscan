@@ -18,7 +18,7 @@ import {
   fetchResourceAssets,
 } from "@/audit/adapter";
 import { entityMapSite, storeEntityMap } from "@/audit/entity-map";
-import { loadConfig } from "@/config";
+import { loadConfig, type Config } from "@/config";
 import {
   type Result,
   ok,
@@ -287,14 +287,7 @@ export async function runAnalyze(
     );
     const siteContext = await Effect.runPromise(buildSiteContext(pages));
 
-    logger.debug("fetching resource assets", crawlId);
     onProgress({ phase: "rules" });
-
-    const assets = await Effect.runPromise(
-      fetchResourceAssets(storage, crawlId, siteContext, config)
-    );
-
-    logger.debug("running rules on crawl", crawlId);
 
     // Entity map (#2091) built BEFORE the rules, because the thirteen
     // `schema/entity-*` rules read it (#2093). `siteContext` is already
@@ -312,16 +305,8 @@ export async function runAnalyze(
       );
     }
 
-    // Run rules on site context (no additional parsing)
-    const ruleResults = await Effect.runPromise(
-      runRulesOnStorage(
-        storage,
-        crawlId,
-        siteContext,
-        config,
-        assets,
-        entityMap ? { entityMap } : undefined
-      )
+    const { ruleResults } = await Effect.runPromise(
+      analyzeStoredCrawl(storage, crawl, siteContext, config, entityMap)
     );
 
     // Save rule results to storage using batch method for efficiency
@@ -436,4 +421,70 @@ export async function runAnalyze(
       );
     }
   }
+}
+
+/**
+ * The asset phase, then the rules, over a stored crawl, both with the
+ * crawl's own config ({@link configForCrawl}): the same asset phase
+ * `squirrel audit` runs (#768, #799).
+ */
+export function analyzeStoredCrawl(
+  storage: CrawlStorage,
+  crawl: CrawlMetadata,
+  siteContext: Parameters<typeof fetchResourceAssets>[2],
+  config: Config,
+  entityMap?: EntityMap
+) {
+  const crawlConfig = configForCrawl(config, crawl);
+  return Effect.gen(function* () {
+    logger.debug("fetching resource assets", crawl.id);
+    const assets = yield* fetchResourceAssets(
+      storage,
+      crawl.id,
+      siteContext,
+      crawlConfig
+    );
+    logger.debug("running rules on crawl", crawl.id);
+    // Run rules on site context (no additional parsing)
+    const ruleResults = yield* runRulesOnStorage(
+      storage,
+      crawl.id,
+      siteContext,
+      crawlConfig,
+      assets,
+      entityMap ? { entityMap } : undefined
+    );
+    return { assets, ruleResults };
+  });
+}
+
+/**
+ * The config an analyze runs with. The crawl may be any project's (the latest
+ * across all of them, or `--id`), while `config` is the squirrel.toml found
+ * from this directory. So the crawl's own recorded scope and page limit decide
+ * what is checked, as they did in the audit, with the strict side for a row
+ * recorded without them (no extra domains). The page limit is the one the
+ * crawl started with (a resumed audit keeps it). Per-host politeness stays as
+ * configured here: the crawl records what its pool resolved to (a rendered or
+ * loopback crawl's), not the limits the audit's own checks ran with. No custom
+ * request headers are sent: this directory's belong to its own site.
+ */
+export function configForCrawl(config: Config, crawl: CrawlMetadata): Config {
+  // Rows recorded before a field existed read back without it.
+  const recorded = crawl.config as Partial<CrawlMetadata["config"]> | undefined;
+  return {
+    ...config,
+    crawler: {
+      ...config.crawler,
+      max_pages: recorded?.maxPages ?? config.crawler.max_pages,
+      include: recorded?.include ?? config.crawler.include,
+      exclude: recorded?.exclude ?? config.crawler.exclude,
+      respect_robots: recorded?.respectRobots ?? config.crawler.respect_robots,
+      headers: {},
+    },
+    project: {
+      ...config.project,
+      domains: recorded?.allowedDomains ?? [],
+    },
+  };
 }
