@@ -95,10 +95,16 @@ Fix the source, not just the page. The report lists which pages carry each broke
 | | |
 |---|---|
 | **Rule ID** | `links/broken-links` |
-| **Category** | [Links](/rules/links) |
+| **Category** | [Reliability](/rules/reliability) |
 | **Scope** | Site-wide |
 | **Severity** | error |
 | **Weight** | 7/10 |
+
+## Category and score
+
+A broken link is a failed request a visitor hits, not a signal a search engine reads, so this rule is in the [Reliability](/rules/reliability) category even though its id keeps the `links/` prefix. The report badges it Reliability. Reliability rolls up into the Performance score group, so its findings count against the Performance group score and no longer against the SEO group. The overall health score weights every rule the same wherever it sits.
+
+Because the id is unchanged, nothing you configured breaks. `links/*` in `enable` or `disable` still selects this rule, `links/broken-links` still names it in `rule_options`, and the docs URL is the same. `reliability/*` does not select it, because a pattern matches on the id, but `--rule-include reliability` and `--rule-exclude reliability` do name it. A JSON or published report written before this change still shows the rule under Links. An audit stored on your machine is rendered with the current categories when you run `squirrel report`, so it now shows the rule under Reliability.
 
 ## Enable / disable
 
@@ -132,7 +138,7 @@ enable = ["links/broken-links"]
 - [crawl/soft-404](/rules/crawl/soft-404): pages that answer 200 while showing an error.
 - [crawl/sitemap-4xx](/rules/crawl/sitemap-4xx): dead URLs you are also submitting in a sitemap.
 
-Links findings ship in every audit next to the SEO, performance and agent experience rules. See [Fix SEO issues with AI](https://squirrelscan.com/learn/fix-seo-issues-with-ai) for how an agent works through a report.
+Reliability findings ship in every audit next to the SEO, performance and agent experience rules. See [Fix SEO issues with AI](https://squirrelscan.com/learn/fix-seo-issues-with-ai) for how an agent works through a report.
 
 ## References
 
