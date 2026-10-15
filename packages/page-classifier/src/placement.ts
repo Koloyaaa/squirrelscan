@@ -43,6 +43,13 @@ export interface SectionPlacement extends SectionPrediction {
 export interface Placement {
   region: RegionPlacement | null;
   section: SectionPlacement | null;
+  /**
+   * A comment thread sits above the element but too far up for the rule to name (a hostile page
+   * can nest one arbitrarily deep). Region and section are then both null on purpose: the element
+   * is in a thread of unknown extent, so a consumer must say "unknown", never fall back to a
+   * region such as page content.
+   */
+  truncated?: true;
 }
 
 interface Walkable {
@@ -70,7 +77,9 @@ export function elementPlacer(
   return (element: unknown): Placement => {
     let region: RegionPlacement | null = null;
     let section: SectionPlacement | null = null;
-    const match = element ? rule.sectionOf(element as Element) : null;
+    const found = element ? rule.lookup(element as Element) : null;
+    if (found && "truncated" in found) return { region: null, section: null, truncated: true };
+    const match = found;
     if (match) {
       section = {
         label: match.label,

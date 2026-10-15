@@ -26,11 +26,14 @@
 type El = Element & { parentElement: El | null };
 
 // The page is attacker-controlled, so every walk and every split is bounded: a chain of thousands of
-// nested elements or a megabyte class attribute must cost the same as a normal page. A comment
-// container further than MAX_HOPS elements above the element asked about, or a comment word past the
-// first MAX_CLASS_TOKENS tokens (or MAX_CLASS_CHARS characters) of a class list, is not a thread
-// this rule needs.
-const MAX_HOPS = 64;
+// nested elements or a megabyte class attribute must cost the same as a normal page. Each element's
+// nearest comment ancestor is worked out once and remembered, so however many links share a deep
+// chain the walk costs one pass over it. A thread more than MAX_HOPS elements above the element
+// asked about is not reported as a thread, and not as "no thread" either: `lookup` says the walk was
+// `truncated`, and the consumer must answer "unknown" rather than guess (fail closed). A comment
+// word past the first MAX_CLASS_TOKENS tokens (or MAX_CLASS_CHARS characters) of a class list is
+// ignored.
+const MAX_HOPS = 256;
 const MAX_CLASS_CHARS = 4096;
 const MAX_CLASS_TOKENS = 32;
 const MAX_TOKEN_CHARS = 256;
@@ -139,8 +142,21 @@ export interface ElementAttributes {
   subtreeSize: ArrayLike<number>;
 }
 
+/** A comment thread sits above the element, but further than the walk cap: its label is unknown. */
+export interface TruncatedLookup {
+  truncated: true;
+}
+
+export type CommentLookup = CommentMatch | TruncatedLookup | null;
+
 export interface CommentRule {
-  /** The comment section `start` sits in (itself or an ancestor), or null. */
+  /**
+   * The comment section `start` sits in (itself or an ancestor), `{ truncated: true }` when one
+   * sits above it but too far to be reported, or null when none does. A caller that places an
+   * element must treat `truncated` as "unknown", never as "not a thread".
+   */
+  lookup(start: Element): CommentLookup;
+  /** The comment section `start` sits in (itself or an ancestor), or null (also when truncated). */
   sectionOf(start: Element): CommentMatch | null;
   /**
    * The outermost comment sections among `elements`, which must be in
@@ -227,20 +243,70 @@ function makeRule(indexH1s: boolean): CommentRule {
     return answer;
   };
 
-  const sectionOf = (start: Element): CommentMatch | null => {
-    let hops = 0;
-    for (let el: El | null = start as El; el && hops <= MAX_HOPS; el = el.parentElement, hops++) {
+  // The nearest comment container above (or at) each element and how far, or null for "none up to
+  // <body>". Filled for every element on the way, so a walk never repeats work.
+  interface Nearest {
+    container: El;
+    dist: number;
+    token: string;
+  }
+  const nearest = new Map<El, Nearest | null>();
+  const nearestHit = (start: El): Nearest | null => {
+    const path: El[] = [];
+    let base: Nearest | null = null;
+    let hitToken: string | null = null;
+    for (let el: El | null = start; el; el = el.parentElement) {
+      const known = nearest.get(el);
+      if (known !== undefined) {
+        base = known;
+        break;
+      }
       const tag = el.localName;
-      if (tag === "body" || tag === "html") return null;
+      if (tag === "body" || tag === "html") {
+        nearest.set(el, null);
+        break;
+      }
+      path.push(el);
       const hit = commentToken(el.getAttribute("id"), el.getAttribute("class"));
-      if (!hit) continue;
-      // A wrapper that holds the page title holds the article too: no ancestor
-      // above it can be a thread either.
-      if (containsH1(el)) return null;
-      const label: CommentSection = inReviews(el) ? "reviews" : "comments";
-      return { label, container: el, hops, token: fold(hit[0]) };
+      if (hit) {
+        hitToken = fold(hit[0]);
+        break;
+      }
     }
-    return null;
+    if (hitToken !== null) {
+      const last = path.length - 1;
+      const container = path[last]!;
+      for (let i = 0; i <= last; i++) {
+        nearest.set(path[i]!, { container, dist: last - i, token: hitToken });
+      }
+    } else {
+      for (let i = 0; i < path.length; i++) {
+        nearest.set(
+          path[i]!,
+          base && { container: base.container, dist: base.dist + (path.length - i), token: base.token },
+        );
+      }
+    }
+    return nearest.get(start) ?? base;
+  };
+
+  const TRUNCATED: TruncatedLookup = { truncated: true };
+
+  const lookup = (start: Element): CommentLookup => {
+    const hit = nearestHit(start as El);
+    if (!hit) return null;
+    // A thread this far up is real but not ours to name: say so instead of "no thread".
+    if (hit.dist > MAX_HOPS) return TRUNCATED;
+    // A wrapper that holds the page title holds the article too: no ancestor
+    // above it can be a thread either.
+    if (containsH1(hit.container)) return null;
+    const label: CommentSection = inReviews(hit.container) ? "reviews" : "comments";
+    return { label, container: hit.container, hops: hit.dist, token: hit.token };
+  };
+
+  const sectionOf = (start: Element): CommentMatch | null => {
+    const found = lookup(start);
+    return found && "truncated" in found ? null : found;
   };
 
   const outermost = (
@@ -268,13 +334,18 @@ function makeRule(indexH1s: boolean): CommentRule {
     return out;
   };
 
-  return { sectionOf, outermost };
+  return { lookup, sectionOf, outermost };
 }
 
 /** The comment section `start` sits in (itself or an ancestor), or null. A
  *  one-off lookup: for many elements of one page, share a `commentRule()`. */
 export function commentSectionOf(start: Element): CommentMatch | null {
   return makeRule(false).sectionOf(start);
+}
+
+/** `CommentRule.lookup` as a one-off. */
+export function commentLookupOf(start: Element): CommentLookup {
+  return makeRule(false).lookup(start);
 }
 
 /** `CommentRule.outermost` as one pass. */

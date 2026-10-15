@@ -90,3 +90,28 @@ describe("elementPlacer", () => {
     expect(spam.section).toMatchObject({ label: "comments", nodeId: null });
   });
 });
+
+describe("a thread out of the rule's reach", () => {
+  test("is placed nowhere: no region, no section, `truncated`, never a fall back to content", () => {
+    const { document } = parseHTML(
+      `<html><body><main><h1>Title</h1><div id="root"></div></main></body></html>`,
+    );
+    let parent = document.getElementById("root")!;
+    for (let i = 0; i < 300; i++) {
+      const child = document.createElement("div");
+      if (i === 0) child.setAttribute("class", "comments");
+      parent.appendChild(child);
+      parent = child;
+    }
+    const anchor = document.createElement("a");
+    anchor.setAttribute("href", "/x");
+    parent.appendChild(anchor);
+    const elements: unknown[] = [];
+    const result = classifyDocument(document, "https://example.com/", { elementsOut: elements });
+    const started = performance.now();
+    const placed = elementPlacer(result, elements)(anchor);
+    expect(placed).toEqual({ region: null, section: null, truncated: true });
+    expect(performance.now() - started).toBeLessThan(50);
+  });
+});
+

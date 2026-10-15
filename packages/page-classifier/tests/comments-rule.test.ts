@@ -5,6 +5,8 @@ import { describe, expect, test } from "bun:test";
 
 import { parseHTML } from "@squirrelscan/parser/dom";
 import {
+  commentLookupOf,
+  commentRule,
   commentSectionOf,
   findCommentSections,
   hasUgcRel,
@@ -199,6 +201,63 @@ describe("outermostCommentSections", () => {
 
 // The page is attacker-controlled: a very deep chain of elements or a huge class attribute must
 // cost what a normal page costs (the walks and token splits are capped).
+describe("a walk cut short fails closed", () => {
+  const BUDGET_MS = 50;
+  /** `depth` nested divs under `#root`; the thread container sits `threadAt` levels from the top. */
+  function nest(depth: number, threadAt: number | null) {
+    const { document } = parseHTML(`<html><body><h1>Title</h1><div id="root"></div></body></html>`);
+    let parent = document.getElementById("root")!;
+    for (let i = 0; i < depth; i++) {
+      const child = document.createElement("div");
+      if (i === threadAt) child.setAttribute("class", "comment-list");
+      parent.appendChild(child);
+      parent = child;
+    }
+    return parent;
+  }
+
+  test("a thread beyond the cap is `truncated`, one inside it is a match", () => {
+    // 300 nested divs, the deepest at depth 299 from the top container: 299 hops, over the cap of 256.
+    expect(commentLookupOf(nest(300, 0))).toEqual({ truncated: true });
+    // The container at index 100 is 199 hops above the deepest div: inside the cap.
+    const near = commentLookupOf(nest(300, 100));
+    expect(near && "truncated" in near).toBe(false);
+    expect(near).toMatchObject({ label: "comments", hops: 199 });
+  });
+
+  test("no thread at any depth is null: only a real thread out of reach is truncated", () => {
+    const started = performance.now();
+    expect(commentLookupOf(nest(300, null))).toBeNull();
+    expect(commentLookupOf(nest(5000, null))).toBeNull();
+    expect(performance.now() - started).toBeLessThan(BUDGET_MS * 2);
+  });
+
+  test("sectionOf stays null for a truncated lookup, for callers that only want a match", () => {
+    expect(commentSectionOf(nest(300, 0))).toBeNull();
+  });
+
+  test("many elements under one deep chain share one walk, and stay under budget", () => {
+    const { document } = parseHTML(`<html><body><h1>Title</h1><div id="root"></div></body></html>`);
+    let parent = document.getElementById("root")!;
+    for (let i = 0; i < 5000; i++) {
+      const child = document.createElement("div");
+      if (i === 0) child.setAttribute("class", "comments");
+      parent.appendChild(child);
+      parent = child;
+    }
+    const anchors: Element[] = [];
+    for (let i = 0; i < 10_000; i++) {
+      const a = document.createElement("a");
+      parent.appendChild(a);
+      anchors.push(a);
+    }
+    const rule = commentRule();
+    const started = performance.now();
+    for (const a of anchors) expect(rule.lookup(a)).toEqual({ truncated: true });
+    expect(performance.now() - started).toBeLessThan(BUDGET_MS * 4);
+  });
+});
+
 describe("hostile markup stays cheap", () => {
   const BUDGET_MS = 50;
 

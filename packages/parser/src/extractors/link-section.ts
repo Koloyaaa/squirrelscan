@@ -100,6 +100,12 @@ export interface PlacedLabel {
 export interface LinkPlacement {
   region: PlacedLabel | null;
   section: PlacedLabel | null;
+  /**
+   * The classifier found a comment thread above the anchor too far up to name. The answer is then
+   * "unknown", never a region: a hostile page must not be able to turn a comment link into "page
+   * content" by nesting the thread deeper than the walk cap.
+   */
+  truncated?: boolean;
 }
 
 /** Place one anchor on the page, or null when the classifier has nothing to say. */
@@ -172,6 +178,9 @@ export function mergeLinkSection(
     return { section: markup };
   }
   if (!placement) return { section: markup };
+  // Fail closed: an element in a thread of unknown extent reads "unknown", even where the markup
+  // alone would have said "content".
+  if (placement.truncated) return { section: markup === "content" ? "unknown" : markup };
   const named = placement.section;
   const purpose = named
     ? COMMENT_LABELS.has(named.label)

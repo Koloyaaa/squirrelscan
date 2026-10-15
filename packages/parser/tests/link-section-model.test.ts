@@ -167,6 +167,38 @@ describe("link section from the classifier", () => {
   });
 });
 
+describe("a truncated placement fails closed", () => {
+  const truncatedHook: PageClassifierHook = () => ({
+    classification: { pageType: { label: "other", confidence: 0, source: "rules" }, degraded: "" },
+    // What the classifier says for a link in a comment thread nested out of its reach: nothing
+    // placed, and a region answer that must not be used.
+    placeLink: () => ({
+      region: { label: "content_block", confidence: 0.99, source: "model" },
+      section: { label: "pagination", confidence: 0.99, source: "model" },
+      truncated: true,
+    }),
+  });
+
+  test("unknown stays unknown and content becomes unknown, whatever the model said", () => {
+    const out = links(
+      `<div><a href="/u">u</a></div><main><a href="/c">c</a></main>`,
+      truncatedHook,
+    );
+    expect(out.map((l) => [l.text, l.section, l.sectionSource])).toEqual([
+      ["u", "unknown", undefined],
+      ["c", "unknown", undefined],
+    ]);
+  });
+
+  test("a landmark the markup names is kept", () => {
+    const out = links(`<nav><a href="/n">n</a></nav><footer><a href="/f">f</a></footer>`, truncatedHook);
+    expect(out.map((l) => [l.text, l.section])).toEqual([
+      ["n", "navigation"],
+      ["f", "footer"],
+    ]);
+  });
+});
+
 describe("page classification on the parsed page", () => {
   test("is stored when the hook answers and absent when it returns null or throws", () => {
     const classify = hookFor({});
