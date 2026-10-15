@@ -82,7 +82,7 @@ describe("squirrel audit with the page classifier", () => {
       expect(["model", "rules"]).toContain(classification.pageType.source);
       expect(classification.degraded).toBe("");
     }
-    const labels = broken.map((item) => item.label);
+    const labels = broken.map((item) => item.label ?? "");
     expect(
       labels.some(
         (l) => l.includes("/gone-footer") && l.includes("linked in the footer")
@@ -104,7 +104,7 @@ describe("squirrel audit with the page classifier", () => {
         expect("sectionSource" in link).toBe(false);
       }
     }
-    const labels = broken.map((item) => item.label);
+    const labels = broken.map((item) => item.label ?? "");
     expect(
       labels.some(
         (l) => l.includes("/gone-footer") && l.includes("linked in the footer")
