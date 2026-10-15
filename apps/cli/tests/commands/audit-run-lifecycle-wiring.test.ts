@@ -125,7 +125,7 @@ afterEach(() => {
 
 async function runAudit(): Promise<void> {
   const rawArgs = [
-    "https://unreachable.example/",
+    "https://unreachable.example.com/",
     "-m",
     "1",
     "-C",

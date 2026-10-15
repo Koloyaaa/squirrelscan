@@ -288,9 +288,9 @@ describe("local link checks: walls and timeouts are unverifiable (pub#800)", () 
 
   test("a cached wall or timeout counted broken before is asked again", async () => {
     const before = Date.parse("2026-10-15T00:00:00Z");
-    const wall = "https://walled.example/x";
-    const stalled = "https://stalls.example/y";
-    const gone = "https://gone.example/z";
+    const wall = "https://walled.example.com/x";
+    const stalled = "https://stalls.example.com/y";
+    const gone = "https://gone.example.com/z";
     const stale: LinkCacheEntry[] = [
       { href: wall, status: 405, error: null, redirectTarget: null, checkedAt: before },
       { href: stalled, status: null, error: "timeout", redirectTarget: null, checkedAt: before },
@@ -327,7 +327,7 @@ describe("local link checks: walls and timeouts are unverifiable (pub#800)", () 
 
   test("a wall status cached after the change is a real answer, used as-is", async () => {
     const later: LinkCacheEntry = {
-      href: "https://walled.example/after",
+      href: "https://walled.example.com/after",
       status: 403,
       error: null,
       redirectTarget: null,

@@ -133,7 +133,8 @@ describe("checkExternalLinks with a bulk checker", () => {
     userAgent: "squirrel-test",
     egress: { allowPrivateNetwork: true, resolve: async () => ["127.0.0.1"] },
   };
-  const byName = (origin: string) => origin.replace("http://127.0.0.1", "http://targets.example");
+  const byName = (origin: string) =>
+    origin.replace("http://127.0.0.1", "http://targets.example.com");
 
   test("urls the service leaves out of a chunk are checked locally, with their local status", async () => {
     const origin = byName(serveTargets());

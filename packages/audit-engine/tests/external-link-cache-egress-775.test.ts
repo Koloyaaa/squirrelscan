@@ -152,6 +152,8 @@ describe("the bulk checker only ever gets public links", () => {
       `http://localhost:${port}/b`,
       `http://nas:${port}/c`,
       `http://printer.local:${port}/d`,
+      // pub#805: a Valet or Herd site's own `.test` links stay local too.
+      `http://other.test:${port}/e`,
     ];
     const results = await run([PUBLIC, ...nonPublic], {
       egress: policy(true),
@@ -172,7 +174,7 @@ describe("the bulk checker only ever gets public links", () => {
 });
 
 describe("the bulk checker's refusal of a non-public address is not a verdict", () => {
-  const intranet = () => `http://intranet.example.test:${port}/`;
+  const intranet = () => `http://intranet.example.com:${port}/`;
 
   test("a public site's audit: checked locally, refused, never broken and never cached", async () => {
     const url = intranet();

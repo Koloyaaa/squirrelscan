@@ -96,7 +96,7 @@ function refusedCheck(linkCheck: NonNullable<SiteData["externalLinkCheck"]>): Ch
   return {
     name: "refused-external-links",
     status: "info",
-    message: `${count} external link(s) point at a private, link-local or cloud metadata address, so they were not requested and their status was not checked`,
+    message: `${count} external link(s) point at a private, link-local or cloud metadata address, or a name public DNS does not resolve, so they were not requested and their status was not checked`,
     value: count,
     items: sample.map((l) => ({
       id: l.href,

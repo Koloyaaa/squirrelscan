@@ -128,6 +128,7 @@ describe("runner private-target gate: page rules", () => {
     ["http://10.1.2.3:8080/"],
     ["http://[::1]:5173/"],
     ["http://mac-mini.local/"],
+    ["http://myapp.test/"],
     ["https://localhost:3443/"], // a dev server WITH https is still not the edge
   ])("%s: every gated rule emits exactly one private-target skip", async (url) => {
     const checks = await runPage(url);
@@ -204,7 +205,12 @@ describe("runner private-target gate: the audit URL", () => {
 });
 
 describe("runner private-target gate: site rules", () => {
-  test.each([["http://localhost:3000"], ["https://localhost:3443"], ["http://172.20.0.4"]])(
+  test.each([
+    ["http://localhost:3000"],
+    ["https://localhost:3443"],
+    ["http://172.20.0.4"],
+    ["http://myapp.test"],
+  ])(
     "%s: every gated site rule emits exactly one private-target skip",
     async (baseUrl) => {
       const checks = await runSite(baseUrl);

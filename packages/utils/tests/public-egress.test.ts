@@ -103,6 +103,7 @@ describe("assertEgressAllowed: public site", () => {
     "http://localhost./a",
     "http://metadata.google.internal/computeMetadata/v1/",
     "http://box.local/a",
+    "http://service.test/a",
     "http://intranet/a",
     "ftp://cdn.example.net/a",
     "file:///etc/passwd",
@@ -742,7 +743,7 @@ describe("refusedWithoutLookup: what the URL alone settles (pub#770)", () => {
   });
 
   test("a public name is left to the request's own vetting", () => {
-    expect(refusedWithoutLookup("https://partner.example/pricing", publicSite)).toBe(false);
+    expect(refusedWithoutLookup("https://partner.example.com/pricing", publicSite)).toBe(false);
   });
 
   test("a private site's audit allows private addresses, never link-local or metadata", () => {
