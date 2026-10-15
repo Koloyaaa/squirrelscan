@@ -61,12 +61,18 @@ const METADATA_HOSTNAMES = new Set([
  * apex AND as a suffix. `local` is mDNS, `internal` / `intranet` / `lan` /
  * `home.arpa` are private-use zones, `localhost` is loopback by RFC 6761, `svc`
  * is a Kubernetes service name, `consul` / `nomad` are service-discovery zones.
+ * `test`, `example` and `invalid` are reserved for testing and documentation
+ * and never resolve publicly (RFC 2606, RFC 6761); local development tools
+ * (Laravel Valet, Herd) serve sites on `.test`. `localdomain` is the
+ * conventional local domain, `onion` (RFC 7686) and `alt` (RFC 9476) are
+ * special-use names outside the public DNS (pub#805).
  * Not all of them are formally reserved: `localhost` (RFC 6761), `local`
- * (RFC 6762), `home.arpa` (RFC 8375) and `internal` (ICANN, for private use)
- * are; `corp` is indefinitely deferred by ICANN; the rest are simply not
- * delegated public TLDs today, so no public site can sit under one. The list
- * is the API's `classifyHostedEgressHost` list, entry for entry: if a zone is
- * ever delegated, both change together.
+ * (RFC 6762), `home.arpa` (RFC 8375), `internal` (ICANN, for private use),
+ * `test`, `example`, `invalid`, `onion` and `alt` are; `corp` and `home` are
+ * indefinitely deferred by ICANN; the rest are simply not delegated public
+ * TLDs today, so no public site can sit under one. The list is the API's
+ * `classifyHostedEgressHost` list, entry for entry: if a zone is ever
+ * delegated, both change together.
  */
 const INTERNAL_NAME_ZONES = [
   "localhost",
@@ -80,6 +86,13 @@ const INTERNAL_NAME_ZONES = [
   "svc",
   "consul",
   "nomad",
+  "test",
+  "example",
+  "invalid",
+  "localdomain",
+  "home",
+  "onion",
+  "alt",
 ];
 
 /**

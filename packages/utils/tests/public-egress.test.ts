@@ -742,7 +742,13 @@ describe("refusedWithoutLookup: what the URL alone settles (pub#770)", () => {
   });
 
   test("a public name is left to the request's own vetting", () => {
-    expect(refusedWithoutLookup("https://partner.example/pricing", publicSite)).toBe(false);
+    expect(refusedWithoutLookup("https://partner.example.com/pricing", publicSite)).toBe(false);
+  });
+
+  test("a name in a reserved or local-only zone is refused on a public site's audit (pub#805)", () => {
+    expect(refusedWithoutLookup("https://partner.example/pricing", publicSite)).toBe(true);
+    expect(refusedWithoutLookup("http://myapp.test/", publicSite)).toBe(true);
+    expect(refusedWithoutLookup("http://myapp.test/", privateSite)).toBe(false);
   });
 
   test("a private site's audit allows private addresses, never link-local or metadata", () => {

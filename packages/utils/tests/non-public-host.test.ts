@@ -90,6 +90,23 @@ describe("nonPublicHostLabel", () => {
     expect(nonPublicHostLabel(url)).toBe(label);
   });
 
+  // pub#805: reserved and local-only zones no public site can sit under, at
+  // the apex and below it. Laravel Valet and Herd serve sites on `.test`.
+  test.each([
+    ["http://myapp.test/", "myapp.test"],
+    ["http://test/", "test"],
+    ["https://shop.example/", "shop.example"],
+    ["http://example/", "example"],
+    ["http://nothing.invalid/", "nothing.invalid"],
+    ["http://box.localdomain/", "box.localdomain"],
+    ["http://router.home:8080/", "router.home:8080"],
+    ["http://abcdefghijklmnop.onion/", "abcdefghijklmnop.onion"],
+    ["http://name.alt/", "name.alt"],
+    ["http://APP.TEST./", "app.test."],
+  ])("%s is local or private, labelled %s (pub#805)", (url, label) => {
+    expect(nonPublicHostLabel(url)).toBe(label);
+  });
+
   // The NAME rules must never see an IP literal. Every IPv6 address is dotless,
   // so running the dotless-host rule over one would classify `2606:4700::1111`,
   // a real public address, as private.
@@ -126,7 +143,16 @@ describe("nonPublicHostLabel", () => {
     ["https://localhost.example.com/"],
     ["https://mylocalhost.com/"],
     ["https://localhost-app.io/"],
-    ["https://shop.local.example/"],
+    ["https://shop.local.example.com/"],
+    // pub#805: the reserved zones match only as the last label.
+    ["https://test.com/"],
+    ["https://shop.test.io/"],
+    ["https://example.com/"],
+    ["https://www.example.org/"],
+    ["https://home.com/"],
+    ["https://myhome.co.uk/"],
+    ["https://alt.example.com/"],
+    ["https://onion.io/"],
     ["https://10.0.0.1.example.com/"],
   ])("%s is a look-alike and stays public", (url) => {
     expect(nonPublicHostLabel(url)).toBeNull();
