@@ -59,7 +59,7 @@ const META: RuleMeta = {
  * (same shape the flatness + golden tests use).
  */
 function siteData(): SiteData {
-  return { baseUrl: "http://synthetic.test", pages: [], robotsTxt: null, sitemaps: null };
+  return { baseUrl: "http://synthetic.example.com", pages: [], robotsTxt: null, sitemaps: null };
 }
 
 /**

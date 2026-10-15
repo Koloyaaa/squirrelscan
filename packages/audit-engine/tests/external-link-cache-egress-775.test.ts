@@ -172,7 +172,7 @@ describe("the bulk checker only ever gets public links", () => {
 });
 
 describe("the bulk checker's refusal of a non-public address is not a verdict", () => {
-  const intranet = () => `http://intranet.example.test:${port}/`;
+  const intranet = () => `http://intranet.example.com:${port}/`;
 
   test("a public site's audit: checked locally, refused, never broken and never cached", async () => {
     const url = intranet();

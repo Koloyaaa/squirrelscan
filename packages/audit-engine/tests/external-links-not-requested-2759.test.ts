@@ -252,7 +252,7 @@ describe("checkExternalLinks redirects", () => {
     // A public name for the fixture: the bulk checker never gets a non-public
     // host (pub#775), so a loopback address would not reach it at all.
     const { port } = serve();
-    const third = `http://third.example:${port}`;
+    const third = `http://third.example.com:${port}`;
     const bulkAsked: string[][] = [];
     const results = await Effect.runPromise(
       checkExternalLinks([`${third}${UNSUBSCRIBE}`, `${third}/partner`], null, {
@@ -288,7 +288,7 @@ describe("the cloud's dead-links service and not-requested links (repo#2759)", (
         } as never),
       ),
     );
-    const third = "https://third.example";
+    const third = "https://third.example.com";
     const occurrences: ExternalLinkOccurrences = new Map();
     for (const [path, text] of [
       ["/partner", "Our partner"],

@@ -39,7 +39,7 @@ function serveTargets(): string {
     },
   });
   servers.push(server);
-  return `http://targets.example:${server.port}`;
+  return `http://targets.example.com:${server.port}`;
 }
 
 /** A dead-links client that answers whichever urls `pick` names, as live. */

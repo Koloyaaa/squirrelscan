@@ -124,7 +124,7 @@ describe("runStreamingRules — canonical 518-page v1↔v2 merge gate", () => {
       // markdown, so healthScore.overall was still 48 at that point.
       // 99221 -> 99721: content/dev-leakage (#1353) is the same shape again and
       // adds the same 500. All 500 pass: the fixture's origin is
-      // `http://synthetic.test`, which is neither a dev host nor HTTPS, so
+      // `http://synthetic.example.com`, which is neither a dev host nor HTTPS, so
       // neither the host families nor the http-self-link kind can fire.
       // 99721 -> 99734: the thirteen schema/entity-* rules (#2093), site-scoped,
       // each adding exactly one whole-crawl check. +13 and not one more is the
