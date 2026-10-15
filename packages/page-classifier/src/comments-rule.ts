@@ -25,6 +25,17 @@
 
 type El = Element & { parentElement: El | null };
 
+// The page is attacker-controlled, so every walk and every split is bounded: a chain of thousands of
+// nested elements or a megabyte class attribute must cost the same as a normal page. A comment
+// container further than MAX_HOPS elements above the element asked about, or a comment word past the
+// first MAX_CLASS_TOKENS tokens (or MAX_CLASS_CHARS characters) of a class list, is not a thread
+// this rule needs.
+const MAX_HOPS = 64;
+const MAX_CLASS_CHARS = 4096;
+const MAX_CLASS_TOKENS = 32;
+const MAX_TOKEN_CHARS = 256;
+const MAX_ID_CHARS = 256;
+
 export type CommentSection = "comments" | "reviews";
 
 export interface CommentMatch {
@@ -95,6 +106,8 @@ const MAY_HOLD = /comment/i;
 /** The first comment-section token among an id and a class list (id first),
  *  or undefined. */
 function commentToken(id: string | null, cls: string | null): [string, "id" | "class"] | undefined {
+  if (id !== null && id.length > MAX_ID_CHARS) id = id.slice(0, MAX_ID_CHARS);
+  if (cls !== null && cls.length > MAX_CLASS_CHARS) cls = cls.slice(0, MAX_CLASS_CHARS);
   const idMay = id !== null && (MAY_HOLD.test(id) || WHOLE_IDS.has(id.trim().toLowerCase()));
   if (!idMay && (cls === null || !MAY_HOLD.test(cls))) return undefined;
   return tokensFrom(id, cls).find(([token, kind]) => isCommentToken(token, kind));
@@ -102,8 +115,15 @@ function commentToken(id: string | null, cls: string | null): [string, "id" | "c
 
 function tokensFrom(id: string | null, cls: string | null): Array<[string, "id" | "class"]> {
   const out: Array<[string, "id" | "class"]> = [];
-  if (id) out.push([id.trim(), "id"]);
-  if (cls) for (const c of cls.split(/\s+/)) if (c) out.push([c, "class"]);
+  if (id) out.push([id.slice(0, MAX_ID_CHARS).trim(), "id"]);
+  if (cls) {
+    let kept = 0;
+    for (const c of cls.slice(0, MAX_CLASS_CHARS).split(/\s+/)) {
+      if (!c) continue;
+      out.push([c.length > MAX_TOKEN_CHARS ? c.slice(0, MAX_TOKEN_CHARS) : c, "class"]);
+      if (++kept === MAX_CLASS_TOKENS) break;
+    }
+  }
   return out;
 }
 
@@ -184,10 +204,17 @@ function makeRule(indexH1s: boolean): CommentRule {
   const inReviews = (start: El): boolean => {
     const path: El[] = [];
     let answer = false;
+    let settled = true;
     for (let el: El | null = start; el && el.localName !== "body"; el = el.parentElement) {
       const known = underReviews.get(el);
       if (known !== undefined) {
         answer = known;
+        break;
+      }
+      if (path.length >= MAX_HOPS) {
+        // Cut short: answer "no" for this lookup, but do not remember it, since an element
+        // nearer the top of the path may well sit under a reviews container the cap hid.
+        settled = false;
         break;
       }
       path.push(el);
@@ -196,13 +223,13 @@ function makeRule(indexH1s: boolean): CommentRule {
         break;
       }
     }
-    for (const el of path) underReviews.set(el, answer);
+    if (settled) for (const el of path) underReviews.set(el, answer);
     return answer;
   };
 
   const sectionOf = (start: Element): CommentMatch | null => {
     let hops = 0;
-    for (let el: El | null = start as El; el; el = el.parentElement, hops++) {
+    for (let el: El | null = start as El; el && hops <= MAX_HOPS; el = el.parentElement, hops++) {
       const tag = el.localName;
       if (tag === "body" || tag === "html") return null;
       const hit = commentToken(el.getAttribute("id"), el.getAttribute("class"));

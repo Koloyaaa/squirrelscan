@@ -196,3 +196,105 @@ describe("outermostCommentSections", () => {
     expect(found[0]!.match.token).toBe("comments");
   });
 });
+
+// The page is attacker-controlled: a very deep chain of elements or a huge class attribute must
+// cost what a normal page costs (the walks and token splits are capped).
+describe("hostile markup stays cheap", () => {
+  const BUDGET_MS = 50;
+
+  /** `depth` nested divs under `top`, returning the deepest one, as an anchor-like target. */
+  function chain(depth: number, topClass?: string) {
+    const { document } = parseHTML(`<html><body><h1>Title</h1><div id="root"></div></body></html>`);
+    let parent = document.getElementById("root")!;
+    if (topClass) parent.setAttribute("class", topClass);
+    for (let i = 0; i < depth; i++) {
+      const child = document.createElement("div");
+      parent.appendChild(child);
+      parent = child;
+    }
+    return { document, deepest: parent };
+  }
+
+  /** About 1 MB of distinct class tokens (a parser folds repeats, so they must differ). */
+  const manyTokens = (): string => Array.from({ length: 130_000 }, (_, i) => `t${i}`).join(" ") + " ";
+
+  const timed = <T>(fn: () => T): { value: T; ms: number } => {
+    const started = performance.now();
+    const value = fn();
+    return { value, ms: performance.now() - started };
+  };
+
+  test("a 5,000-deep chain: a thread beyond 64 hops is not found, and it is fast", () => {
+    const { deepest } = chain(5000, "comments");
+    const { value, ms } = timed(() => commentSectionOf(deepest));
+    expect(value).toBeNull();
+    expect(ms).toBeLessThan(BUDGET_MS);
+  });
+
+  test("a thread within 64 hops of the element is still found, however deep the page is", () => {
+    const { document } = parseHTML(`<html><body><h1>Title</h1><div id="root"></div></body></html>`);
+    let parent = document.getElementById("root")!;
+    for (let i = 0; i < 5000; i++) {
+      const child = document.createElement("div");
+      if (i === 4990) child.setAttribute("class", "comment-list");
+      parent.appendChild(child);
+      parent = child;
+    }
+    const { value, ms } = timed(() => commentSectionOf(parent));
+    expect(value?.label).toBe("comments");
+    expect(value?.hops).toBe(9);
+    expect(ms).toBeLessThan(BUDGET_MS);
+  });
+
+  test("a reviews container beyond 64 hops is not looked for", () => {
+    const { document } = parseHTML(
+      `<html><body><h1>Title</h1><div id="root" class="reviews"></div></body></html>`,
+    );
+    let parent = document.getElementById("root")!;
+    for (let i = 0; i < 5000; i++) {
+      const child = document.createElement("div");
+      if (i === 4980) child.setAttribute("class", "comment-list");
+      parent.appendChild(child);
+      parent = child;
+    }
+    const { value, ms } = timed(() => commentSectionOf(parent));
+    expect(value?.label).toBe("comments");
+    expect(ms).toBeLessThan(BUDGET_MS);
+  });
+
+  test("a 1 MB class attribute: a comment word past the first 4 KB is ignored, one near the start counts", () => {
+    const filler = manyTokens();
+    const late = parseHTML(
+      `<html><body><h1>T</h1><div class="${filler}comments"><a class="t" href="/a">a</a></div></body></html>`,
+    ).document.querySelector("a.t")!;
+    const early = parseHTML(
+      `<html><body><h1>T</h1><div class="comments ${filler}"><a class="t" href="/a">a</a></div></body></html>`,
+    ).document.querySelector("a.t")!;
+    const lateRun = timed(() => commentSectionOf(late));
+    expect(lateRun.value).toBeNull();
+    expect(lateRun.ms).toBeLessThan(BUDGET_MS);
+    const earlyRun = timed(() => commentSectionOf(early));
+    expect(earlyRun.value?.label).toBe("comments");
+    expect(earlyRun.ms).toBeLessThan(BUDGET_MS);
+  });
+
+  test("a 1 MB class value with no whitespace and a 1 MB id are cheap and match nothing", () => {
+    const blob = "a".repeat(1_000_000);
+    const el = parseHTML(
+      `<html><body><h1>T</h1><div id="${blob}" class="${blob}"><a class="t" href="/a">a</a></div></body></html>`,
+    ).document.querySelector("a.t")!;
+    const { value, ms } = timed(() => commentSectionOf(el));
+    expect(value).toBeNull();
+    expect(ms).toBeLessThan(BUDGET_MS);
+  });
+
+  test("the whole-page scan stays cheap on the same markup", () => {
+    const filler = manyTokens();
+    const { document } = parseHTML(
+      `<html><body><h1>T</h1><div class="${filler}comments"><p>x</p></div><div class="comments ${filler}"><p>y</p></div></body></html>`,
+    );
+    const { value, ms } = timed(() => findCommentSections(document));
+    expect(value.length).toBe(1);
+    expect(ms).toBeLessThan(BUDGET_MS);
+  });
+});
