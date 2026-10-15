@@ -109,6 +109,17 @@ function escapeMarkdownInline(value: string): string {
   return output.join("");
 }
 
+/**
+ * An item label as markdown link text or plain text. A label can embed a page URL the audited site
+ * controls, and a URL such as `https://example.com/?q=![t](https://evil.example/p.png)` would
+ * render a remote image. Brackets, backslashes and angle brackets are escaped, which stops a nested
+ * link, image or raw tag and leaves every other character, parentheses and underscores included,
+ * as it was.
+ */
+function escapeItemLabel(value: string): string {
+  return value.replace(/[\\\[\]<>]/g, (char) => `\\${char}`);
+}
+
 function siteProfileMarkdownValue(value: string, rawUrl?: string): string {
   const label = escapeMarkdownTableCell(value, true);
   if (!rawUrl) return label;
@@ -536,12 +547,12 @@ export function renderMarkdown(report: AuditReport, options?: MarkdownRenderOpti
           );
           lines.push("");
           for (const item of visibleItems) {
-            const label = item.label ?? item.id;
+            const label = escapeItemLabel(item.label ?? item.id);
             const isUrl =
               item.id.startsWith("http://") ||
               item.id.startsWith("https://") ||
               item.id.startsWith("/");
-            const display = isUrl ? `[${label}](${item.id})` : label;
+            const display = isUrl ? `[${label}](${escapeMarkdownDestination(item.id)})` : label;
             lines.push(`- ${display}`);
             if (item.sourcePages && item.sourcePages.length > 0) {
               for (const src of item.sourcePages.slice(0, REPORT_SOURCE_PAGES_PREVIEW)) {

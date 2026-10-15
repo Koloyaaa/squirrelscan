@@ -116,3 +116,25 @@ describe("a page-URL item with no label of its own is still folded into the page
     expect(renderHtml(bare)).not.toContain("1 item");
   });
 });
+
+describe("a label that embeds a site-controlled URL cannot inject markdown", () => {
+  test("brackets in a label are escaped, so a nested image is not rendered", () => {
+    const evil = "https://example.com/blog?q=![t](https://evil.example/p.png)";
+    const md = renderMarkdown(
+      report([{ id: evil, label: `${evil}, linked only from the footer` }]),
+    );
+    const itemLine = md.split("\n").find((line) => line.includes("linked only from the footer"))!;
+
+    // The label's brackets are literal text; the destination is one percent-encoded URL.
+    expect(itemLine).toBe(
+      "- [https://example.com/blog?q=!\\[t\\](https://evil.example/p.png), linked only from the footer](https://example.com/blog?q=![t]%28https://evil.example/p.png%29)",
+    );
+  });
+
+  test("parentheses in the link destination are percent-encoded", () => {
+    const id = "https://example.com/a(b)";
+    const md = renderMarkdown(report([{ id, label: `${id}, linked in the footer` }]));
+
+    expect(md).toContain("(https://example.com/a%28b%29)");
+  });
+});
