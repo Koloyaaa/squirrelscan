@@ -16,7 +16,13 @@ When a finding names a link, squirrel can say where on the page that link sits: 
 - It also stores a page type for each page (article, product, docs, legal and so on) for later rules.
 - The model is about 9 MB, loaded the first time a page is classified. Commands that never audit never read it.
 
-Today `links/broken-links` uses it: an item reads `https://example.com/old (404), linked in the pagination`. See [links/broken-links](/rules/links/broken-links) for the sections and phrases.
+Three rules use it today:
+
+- `links/broken-links`: an item reads `https://example.com/old (404), linked in the pagination`. See [links/broken-links](/rules/links/broken-links) for the sections and phrases.
+- `schema/expected-type`: a page the classifier is sure is a product, article, contact, about, docs or listing page, and that declares none of the structured data that type should carry. See [schema/expected-type](/rules/schema/expected-type).
+- `schema/breadcrumb`: a page with a breadcrumb trail and no `BreadcrumbList` markup. See [schema/breadcrumb](/rules/schema/breadcrumb).
+
+With the classifier off, `schema/expected-type` has no page type to read and reports nothing, and `schema/breadcrumb` keeps its info check.
 
 ## Configuration
 

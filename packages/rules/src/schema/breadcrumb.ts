@@ -4,6 +4,17 @@ import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
 
 import { flattenJsonLdNodes } from "@squirrelscan/utils";
 
+import { microdataAndRdfaTypes } from "./markup-types";
+
+/**
+ * Anchors the classifier must place in the breadcrumbs section before a missing
+ * schema is a finding. One, not two: the current page is plain text in a trail, so
+ * a short trail is a single link (`Docs / Security`). Measured on a small SaaS
+ * site, every one of its 14 docs pages with a trail has exactly one such link, and
+ * none has two.
+ */
+const MIN_TRAIL_LINKS = 1;
+
 export const breadcrumbSchemaRule: Rule = {
   meta: {
     id: "schema/breadcrumb",
@@ -14,7 +25,7 @@ export const breadcrumbSchemaRule: Rule = {
     category: "schema",
     scope: "page",
     verdictScope: "page",
-    severity: "info",
+    severity: "warning",
     weight: 3,
   },
 
@@ -60,6 +71,26 @@ export const breadcrumbSchemaRule: Rule = {
     }
 
     if (!breadcrumbSchema) {
+      // The classifier's section head labels an anchor "breadcrumbs" only when it
+      // sits in a trail (a high-precision class, and never a markup-rules answer),
+      // so the page shows a trail that no structured data describes (#2307). With
+      // the classifier off no link carries a section and this stays the info check.
+      const trailLinks = (ctx.parsed.links ?? []).filter((link) => link.section === "breadcrumbs").length;
+      // A trail marked up as microdata or RDFa (older themes) is described, just not
+      // in JSON-LD, so it is not this finding.
+      const hasMarkupTrail = microdataAndRdfaTypes(doc).some(
+        (name) => name.toLowerCase() === "breadcrumblist"
+      );
+      if (trailLinks >= MIN_TRAIL_LINKS && !hasMarkupTrail) {
+        checks.push({
+          name: "breadcrumb-schema",
+          status: "fail",
+          message: "A breadcrumb trail on the page has no BreadcrumbList schema",
+          value: "Add BreadcrumbList JSON-LD that mirrors the trail",
+          details: { trailLinks },
+        });
+        return { checks };
+      }
       checks.push({
         name: "breadcrumb-schema",
         status: "info",
