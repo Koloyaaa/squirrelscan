@@ -58,7 +58,7 @@ Arrives when a [scheduled audit](/cloud/scheduled-audits) of the website finds l
 - a link the checker could not verify, because the site blocked the check, rate limited it or timed out;
 - an internal link behind a sign-in (401 or 403), or one that answered a server error once.
 
-A link counts only when the previous scheduled audit ran the same check and crawled a page the link is on now. A deeper crawl, or a check you just switched on, does not report old breakage as new.
+The alert compares with the previous scheduled audit's list of broken links, so it needs that audit to have checked every link and kept the whole list. A report keeps only a handful of broken links of each kind, so on a site that already had more than that, or where some links went unchecked (over the audit's link limit), no alert of that kind is sent. Fix the broken links the report already lists and alerts resume. When this audit found more than its report keeps, the alert says "at least".
 
 The email lists up to 10 of the newly broken links and links to the run's report, which shows every broken link and the pages it is on. One audit sends at most one of these, and the first scheduled audit never sends one, because there is nothing to compare it with. It arrives alongside that run's [digest](#scheduled-audit-digest): the digest reports the whole run, this one only the links that just broke. Like the other alert emails it is held to one an hour and five a day per account, and one over the limit still reaches the dashboard bell. The same alert appears in the dashboard bell, in `list_notifications` over [MCP](/developers/mcp), and, for an organization's websites, on the `notification.created` [webhook](/cloud/webhooks#event-types).
 
