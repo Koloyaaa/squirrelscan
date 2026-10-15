@@ -368,33 +368,6 @@ export function renderLlm(report: AuditReport, options?: LlmRenderOptions): stri
     lines.push("</technologies>");
   }
 
-  // Page structure (#2307) — report-only context for the agent (does not affect the score): which
-  // part of the page the links sit in, and the page types. The sentences are for reading, the
-  // rows for counting.
-  if (report.structure) {
-    const structure = report.structure;
-    const share = structure.chrome.share;
-    lines.push(
-      `<page-structure pages="${structureAttr(structure.pages)}" links="${structureAttr(structure.totalLinks)}"${typeof share === "number" ? ` chrome-share="${structureAttr(share)}"` : ""}>`,
-    );
-    for (const line of [
-      structurePageTypesLine(structure),
-      structureChromeLine(structure),
-      structureTotalsLine(structure),
-      structureDegradedLine(structure),
-    ]) {
-      if (line) lines.push(`${indent(1)}${escapeXml(line)}`);
-    }
-    // The section id as the JSON report spells it, so a row can be matched to `structure.sections`.
-    for (const row of structure.sections) {
-      if (structureSectionName(row.section) === undefined) continue;
-      lines.push(
-        `${indent(1)}<section name="${escapeXml(row.section)}" pages="${structureAttr(row.pages)}" links="${structureAttr(row.links)}"/>`,
-      );
-    }
-    lines.push("</page-structure>");
-  }
-
   const categoryIssues = groupIssuesByCategory(report.ruleResults, report.checkTallies);
 
   if (categoryIssues.length > 0) {
@@ -548,20 +521,6 @@ export function renderLlm(report: AuditReport, options?: LlmRenderOptions): stri
     lines.push("</not-applicable>");
   }
 
-  // repo#2729: checks this audit did not run (link checks off, links not
-  // followed). Their absence from <issues> is NOT a clean result: an agent must
-  // not tell the user "no broken links" when no link was checked.
-  const notChecked = notCheckedRules(report);
-  if (notChecked.length > 0) {
-    lines.push(`<not-checked count="${notChecked.length}">`);
-    for (const rule of notChecked) {
-      lines.push(
-        `${indent(1)}<rule id="${escapeXml(rule.ruleId)}" name="${escapeXml(rule.name)}" check="${escapeXml(rule.check)}" reason="${escapeXml(rule.reason)}">${escapeXml(notCheckedLine(rule))}</rule>`,
-      );
-    }
-    lines.push("</not-checked>");
-  }
-
   // Cloud-/Pro-gated rules that didn't run this audit (#780) — an agent must
   // learn these were skipped (and why), not silently read a partial audit as
   // complete. Audience logic is shared with the HTML report (#368/#747/#792).
@@ -619,6 +578,56 @@ export function renderLlm(report: AuditReport, options?: LlmRenderOptions): stri
       );
     }
     lines.push("</entities>");
+  }
+
+  // Report detail: the last element, after every finding. What this audit did not check, then the
+  // page structure. An agent reads the absence of an issue in <issues> through the first.
+  const detail: string[] = [];
+  // repo#2729: checks this audit did not run (link checks off, links not
+  // followed). Their absence from <issues> is NOT a clean result: an agent must
+  // not tell the user "no broken links" when no link was checked.
+  const notChecked = notCheckedRules(report);
+  if (notChecked.length > 0) {
+    detail.push(`<not-checked count="${notChecked.length}">`);
+    for (const rule of notChecked) {
+      detail.push(
+        `${indent(1)}<rule id="${escapeXml(rule.ruleId)}" name="${escapeXml(rule.name)}" check="${escapeXml(rule.check)}" reason="${escapeXml(rule.reason)}">${escapeXml(notCheckedLine(rule))}</rule>`,
+      );
+    }
+    detail.push("</not-checked>");
+  }
+
+  // Page structure (#2307) — report-only context for the agent (does not affect the score): which
+  // part of the page the links sit in, and the page types. The sentences are for reading, the
+  // rows for counting.
+  if (report.structure) {
+    const structure = report.structure;
+    const share = structure.chrome.share;
+    detail.push(
+      `<page-structure pages="${structureAttr(structure.pages)}" links="${structureAttr(structure.totalLinks)}"${typeof share === "number" ? ` chrome-share="${structureAttr(share)}"` : ""}>`,
+    );
+    for (const line of [
+      structurePageTypesLine(structure),
+      structureChromeLine(structure),
+      structureTotalsLine(structure),
+      structureDegradedLine(structure),
+    ]) {
+      if (line) detail.push(`${indent(1)}${escapeXml(line)}`);
+    }
+    // The section id as the JSON report spells it, so a row can be matched to `structure.sections`.
+    for (const row of structure.sections) {
+      if (structureSectionName(row.section) === undefined) continue;
+      detail.push(
+        `${indent(1)}<section name="${escapeXml(row.section)}" pages="${structureAttr(row.pages)}" links="${structureAttr(row.links)}"/>`,
+      );
+    }
+    detail.push("</page-structure>");
+  }
+
+  if (detail.length > 0) {
+    lines.push("<report-detail>");
+    for (const line of detail) lines.push(`${indent(1)}${line}`);
+    lines.push("</report-detail>");
   }
 
   lines.push("</audit>");

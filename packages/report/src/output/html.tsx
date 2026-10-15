@@ -74,7 +74,7 @@ import {
 import { getAuditFailureNotice, reportFailureReasonCode } from "../failure-notice";
 import { lockedRulesMessage } from "../locked-rules";
 import { privateTargetLine } from "../private-target";
-import { notCheckedLines } from "../not-checked";
+import { notCheckedDetailLines } from "../not-checked";
 
 export interface HtmlRenderOptions {
   /** Report ID for OG meta tags (API use) */
@@ -122,6 +122,12 @@ h2 { font-size: 1.35rem; font-weight: 700; margin: 2.5rem 0 1rem; color: ${THEME
 
 .meta { color: ${THEME.colors.mutedForeground}; font-size: 0.875rem; margin-bottom: 0.5rem; }
 .scan-scope { color: ${THEME.colors.mutedForeground}; font-size: 0.8125rem; margin-top: 0.25rem; }
+.report-detail { margin: 2.5rem 0 1rem; }
+.report-detail h2 { margin-top: 0; }
+.report-detail h3 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: ${THEME.colors.mutedForeground}; font-weight: 600; margin: 1.5rem 0 0.5rem; }
+.report-detail ul { margin: 0; padding-left: 1.1rem; font-size: 0.875rem; }
+.report-detail li { margin: 0.3rem 0; }
+.report-detail .scan-scope, .report-detail .scan-hint { margin-top: 0.3rem; max-width: 52rem; }
 .scan-hint { color: ${THEME.colors.warn}; font-size: 0.8125rem; margin-top: 0.35rem; max-width: 42rem; }
 
 /* Header band: pixel-grid backdrop + primary rule, matching DecorativeHeader */
@@ -667,44 +673,6 @@ function ReportHeader({ report, branding }: { report: AuditReport; branding?: Re
                 {report.totalPages} page{report.totalPages === 1 ? "" : "s"} • Generated{" "}
                 {formatHumanDateTime(report.timestamp)}
               </div>
-              {/* Scan scope disclosure (#1180): the score always reads with its basis.
-                  A refused off-site seed redirect (#1418) sits with them: it is the
-                  same class of fact, that the score is not about the URL you might
-                  assume. React escapes the site-controlled finalUrl as a text child,
-                  and it is deliberately NOT a link: the point is that we did not go
-                  there. */}
-              {(() => {
-                const scope = scanScopeLine(report);
-                const level = auditLevelLine(report);
-                const cov = coverageLine(report);
-                const hint = fullScanHint(report);
-                const seedRedirect = seedRedirectLine(report);
-                // pub#629: the rules a local or private-network host skipped.
-                const privateTarget = privateTargetLine(report);
-                // repo#2729: checks this audit did not run, shown so a skipped
-                // check never reads as a clean one.
-                const notChecked = notCheckedLines(report);
-                // repo#2661: a capped published report lists samples; say so once.
-                const capped = publishedReportNote(report);
-                return (
-                  <>
-                    {(scope || level || cov) && (
-                      <div className="scan-scope">
-                        {[scope, level, cov].filter(Boolean).join(" ")}
-                      </div>
-                    )}
-                    {privateTarget && <div className="scan-scope">{privateTarget}</div>}
-                    {notChecked.map((line) => (
-                      <div key={line} className="scan-hint not-checked">
-                        {line}
-                      </div>
-                    ))}
-                    {capped && <div className="scan-scope">{capped}</div>}
-                    {seedRedirect && <div className="scan-hint">{seedRedirect}</div>}
-                    {hint && <div className="scan-hint">{hint}</div>}
-                  </>
-                );
-              })()}
             </div>
           </div>
           {/* `partial`/`completed`/absent fall through to the normal ring (#489). */}
@@ -1192,38 +1160,93 @@ function TechnologiesSection({ report }: { report: AuditReport }) {
 }
 
 /**
- * Page structure (#2307): link sections as badges (the Technologies badge styles, so no new CSS)
- * with the same sentences the text formats print. Report-only; absent without section data.
+ * Report detail: the last section of the report, after every finding. What this audit did not
+ * check (so a skipped check never reads as clean), the page structure (#2307: link sections as
+ * badges, the Technologies badge styles, so no new CSS for those), then the scope and coverage
+ * notes that qualify the score. They used to sit under the title. Absent when there is none of it.
  */
-function StructureSection({ report }: { report: AuditReport }) {
+function ReportDetail({ report }: { report: AuditReport }) {
+  const notChecked = notCheckedDetailLines(report);
   const structure = report.structure;
-  if (!structure) return null;
-  const lines = [
-    structurePageTypesLine(structure),
-    structureChromeLine(structure),
-    structureTotalsLine(structure),
-    structureDegradedLine(structure),
-  ].filter((line): line is string => line !== null);
-  const rows = structureRows(structure);
+  const structureText = structure
+    ? [
+        structurePageTypesLine(structure),
+        structureChromeLine(structure),
+        structureTotalsLine(structure),
+        structureDegradedLine(structure),
+      ].filter((line): line is string => line !== null)
+    : [];
+  const rows = structure ? structureRows(structure) : [];
+
+  // Scan scope disclosure (#1180): the score always reads with its basis. A refused off-site seed
+  // redirect (#1418) sits with them: it is the same class of fact, that the score is not about the
+  // URL you might assume. React escapes the site-controlled finalUrl as a text child, and it is
+  // deliberately NOT a link: the point is that we did not go there.
+  const scope = scanScopeLine(report);
+  const level = auditLevelLine(report);
+  const cov = coverageLine(report);
+  const scopeText = [scope, level, cov].filter(Boolean).join(" ");
+  const privateTarget = privateTargetLine(report);
+  // repo#2661: a capped published report lists samples; say so once.
+  const capped = publishedReportNote(report);
+  const seedRedirect = seedRedirectLine(report);
+  const hint = fullScanHint(report);
+  const scan: Array<{ text: string; className: string }> = [];
+  if (scopeText) scan.push({ text: scopeText, className: "scan-scope" });
+  if (privateTarget) scan.push({ text: privateTarget, className: "scan-scope" });
+  if (capped) scan.push({ text: capped, className: "scan-scope" });
+  if (seedRedirect) scan.push({ text: seedRedirect, className: "scan-hint" });
+  if (hint) scan.push({ text: hint, className: "scan-hint" });
+
+  if (notChecked.length === 0 && !structure && scan.length === 0) return null;
   return (
-    <div className="tech-section">
-      <h2>Page structure</h2>
-      <div className="tech-note">Where the links on your pages sit. Informational, not part of the score.</div>
-      {rows.length > 0 && (
-        <div className="tech-badges">
-          {rows.map((row) => (
-            <span className="tech-badge" key={row.section}>
-              <span>{row.section}</span>
-              <span className="tech-ver">
-                {structureRowDetail(row)}
-              </span>
-            </span>
-          ))}
-        </div>
+    <div className="report-detail">
+      <h2>Report detail</h2>
+      {notChecked.length > 0 && (
+        <>
+          <h3>Not checked</h3>
+          <ul>
+            {notChecked.map((line) => (
+              <li key={line} className="not-checked">
+                {line}
+              </li>
+            ))}
+          </ul>
+        </>
       )}
-      {lines.map((line) => (
-        <p key={line}>{line}</p>
-      ))}
+      {structure && (
+        <>
+          <h3>Page structure</h3>
+          <div className="tech-note">
+            Where the links on your pages sit. Informational, not part of the score.
+          </div>
+          {rows.length > 0 && (
+            <div className="tech-badges">
+              {rows.map((row) => (
+                <span className="tech-badge" key={row.section}>
+                  <span>{row.section}</span>
+                  <span className="tech-ver">{structureRowDetail(row)}</span>
+                </span>
+              ))}
+            </div>
+          )}
+          {structureText.map((line) => (
+            <p key={line}>{line}</p>
+          ))}
+        </>
+      )}
+      {scan.length > 0 && (
+        <>
+          <h3>Scan details</h3>
+          <ul>
+            {scan.map((item) => (
+              <li key={item.text} className={item.className}>
+                {item.text}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   );
 }
@@ -1543,7 +1566,6 @@ function ReportPage({
           <SiteProfileSection report={report} />
           <DomainStatsSection report={report} />
           <TechnologiesSection report={report} />
-          <StructureSection report={report} />
           {hasIssues ? (
             <IssuesByGroup categories={categoryIssues} />
           ) : isFailedOrBlocked ? null : (
@@ -1553,6 +1575,7 @@ function ReportPage({
           <LockedRulesSection report={report} branding={branding} />
           {/* Cache reuse — quiet run metadata, pinned to the very bottom. */}
           <CacheSection report={report} />
+          <ReportDetail report={report} />
           <Footer report={report} branding={branding} />
         </div>
         {hasScreenshot && <script dangerouslySetInnerHTML={{ __html: SCREENSHOT_HIDE_SCRIPT }} />}

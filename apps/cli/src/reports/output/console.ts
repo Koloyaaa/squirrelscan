@@ -26,7 +26,7 @@ import {
   entityPageTotal,
   primaryEntities,
   privateTargetLine,
-  notCheckedLines,
+  notCheckedDetailLines,
   stableIdPercent,
   DOMAIN_STATS_NOTE,
   domainStatRows,
@@ -145,38 +145,6 @@ export function generateConsoleReport(
   log(
     `${fmt.dim(report.baseUrl)} • ${report.totalPages} page${report.totalPages === 1 ? "" : "s"} • ${colorFn(`${score}/100`)} ${fmt.dim(`(${grade})`)}`
   );
-  // #1829: the caveat on the page count above. Yellow, like the seed-redirect
-  // disclosure below it, because it changes how much of the report to trust.
-  if (report.rateLimited && report.rateLimited.pages > 0) {
-    const hosts =
-      report.rateLimited.hosts.length > 0
-        ? report.rateLimited.hosts.join(", ")
-        : "the host";
-    log(
-      fmt.yellow(
-        `Rate limited by ${hosts}: ${report.rateLimited.pages} page${report.rateLimited.pages === 1 ? "" : "s"} not verified. Set [crawler] per_host_concurrency = 1 and per_host_delay_ms = 500 to crawl it politely.`
-      )
-    );
-  }
-  // Refused off-site seed redirect (#1418): the URL on the line above is what
-  // was graded, NOT where the seed pointed. Yellow rather than dim like the
-  // lines below it — it changes what the whole report is about.
-  const seedRedirect = seedRedirectLine(report);
-  if (seedRedirect) log(fmt.yellow(seedRedirect));
-  // Scan scope (#1180) + smart-audits coverage (#110): the score reads with
-  // its basis. The capped-crawl hint stays with pageLimitHint (commands layer).
-  const scope = scanScopeLine(report);
-  if (scope) log(fmt.dim(scope));
-  const cov = coverageLine(report);
-  if (cov) log(fmt.dim(cov));
-  // pub#629: once, here, rather than a skipped line per rule and page.
-  const privateTarget = privateTargetLine(report);
-  if (privateTarget) log(fmt.dim(privateTarget));
-  // repo#2729: checks this audit did not run (link checks off, links not
-  // followed). Yellow, not dim: a missing check must not read as a clean one.
-  for (const line of notCheckedLines(report)) log(fmt.yellow(line));
-  const partial = partialAuditLine(opts.ruleFilter, report.healthScore);
-  if (partial) log(fmt.dim(partial));
   log(divider());
 
   // Editor's summary — report-only Pro exec narrative, surfaced at the top.
@@ -208,12 +176,6 @@ export function generateConsoleReport(
   if (report.technologies && report.technologies.items.length > 0) {
     log("");
     printTechnologies(report.technologies);
-  }
-
-  // Page structure (#2307) — report-only link sections and page types, not scored.
-  if (report.structure) {
-    log("");
-    printStructure(report.structure);
   }
 
   if (report.entityMap) {
@@ -354,6 +316,9 @@ export function generateConsoleReport(
     log(fmt.green("✓ No issues found"));
   }
 
+  // Report detail: the last section, after every finding.
+  printReportDetail(report, opts);
+
   // Footer
   log("");
   log(divider());
@@ -467,11 +432,71 @@ function printTechnologies(tech: ReportTechnologies): void {
 }
 
 /**
+ * REPORT DETAIL: the last section of the report, after every finding. What this audit did not
+ * check (yellow, so a skipped check never reads as a clean one), the page structure, then the
+ * scope and coverage notes that qualify the score. Nothing is printed when there is none of it.
+ */
+function printReportDetail(
+  report: AuditReport,
+  opts: ConsoleReportOptions
+): void {
+  const notChecked = notCheckedDetailLines(report);
+  const scan: string[] = [];
+  // #1829: coverage lost to throttling. Yellow, because it changes how much of the report to trust.
+  const rateLimited =
+    report.rateLimited && report.rateLimited.pages > 0
+      ? report.rateLimited
+      : null;
+  if (rateLimited) {
+    const hosts =
+      rateLimited.hosts.length > 0 ? rateLimited.hosts.join(", ") : "the host";
+    scan.push(
+      fmt.yellow(
+        `Rate limited by ${hosts}: ${rateLimited.pages} page${rateLimited.pages === 1 ? "" : "s"} not verified. Set [crawler] per_host_concurrency = 1 and per_host_delay_ms = 500 to crawl it politely.`
+      )
+    );
+  }
+  // Refused off-site seed redirect (#1418): the URL at the top is what was graded, NOT where the
+  // seed pointed.
+  const seedRedirect = seedRedirectLine(report);
+  if (seedRedirect) scan.push(fmt.yellow(seedRedirect));
+  // Scan scope (#1180) + smart-audits coverage (#110): the score reads with its basis. The
+  // capped-crawl hint stays with pageLimitHint (commands layer).
+  const scope = scanScopeLine(report);
+  if (scope) scan.push(fmt.dim(scope));
+  const cov = coverageLine(report);
+  if (cov) scan.push(fmt.dim(cov));
+  // pub#629: once, here, rather than a skipped line per rule and page.
+  const privateTarget = privateTargetLine(report);
+  if (privateTarget) scan.push(fmt.dim(privateTarget));
+  const partial = partialAuditLine(opts.ruleFilter, report.healthScore);
+  if (partial) scan.push(fmt.dim(partial));
+  if (notChecked.length === 0 && !report.structure && scan.length === 0) return;
+
+  log("");
+  log(fmt.bold("REPORT DETAIL"));
+  if (notChecked.length > 0) {
+    log("");
+    log(fmt.bold("Not checked"));
+    for (const line of notChecked) log(fmt.yellow(`  - ${line}`));
+  }
+  if (report.structure) {
+    log("");
+    printStructure(report.structure);
+  }
+  if (scan.length > 0) {
+    log("");
+    log(fmt.bold("Scan details"));
+    for (const line of scan) log(`  ${line}`);
+  }
+}
+
+/**
  * The Page structure block (#2307): which part of the page the links sit in, and the page types.
- * Report-only and non-scoring, like Technologies.
+ * Report-only and non-scoring, like Technologies. Printed inside Report detail.
  */
 function printStructure(structure: ReportStructure): void {
-  log(fmt.bold("PAGE STRUCTURE"));
+  log(fmt.bold("Page structure"));
   log(fmt.dim("Where the links on your pages sit. Not part of the score."));
   const typesLine = structurePageTypesLine(structure);
   if (typesLine) {
