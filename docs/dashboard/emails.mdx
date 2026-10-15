@@ -24,7 +24,7 @@ They go to your account address unless the website has its own. Set one in the *
 
 Arrives when an audit of the website finishes and its report reaches the cloud. That covers dashboard runs, scheduled runs, and CLI, API and GitHub audits that publish their report. It carries the health score and the error, warning and passing counts. The button opens the dashboard rather than that specific report, so you pick the run from the website's audit history.
 
-A scheduled run normally sends the [digest](#scheduled-audit-digest) instead, so a run never sends both a completion email and a digest. A run that finds newly broken links can send a [broken link alert](#new-broken-links) as well.
+A scheduled run normally sends the [digest](#scheduled-audit-digest) instead, so a run never sends both a completion email and a digest.
 
 **How to stop it:** turn off **Settings → Alerts** for that website (the email's **Alert settings for this website** link opens it), or **Account alerts** in **Settings → Email** for every website (linked from the email's footer, and the email's [one-click unsubscribe](#email-settings-and-unsubscribing) does the same).
 
@@ -46,7 +46,7 @@ Arrives after a [scheduled audit](/cloud/scheduled-audits) completes, including 
 | Nothing changed | The comparison ran and found nothing | The health score and the same three counts, all at zero |
 | First audit | There is no earlier audit to compare against | That run's own error and warning counts and pages crawled, with no claim about change |
 
-Every variant carries the health score, a link to the full report, and a link that pauses the schedule without a login.
+Every variant carries the health score, a link to the full report, and a link that pauses the schedule without a login. On Pro and Team, a run that finds newly broken links also sends a [broken link alert](#new-broken-links).
 
 Two cases send the ordinary audit email instead. A scheduled run that fails sends the failure email, and a run whose comparison cannot be built falls back to the completion email rather than guessing at what changed.
 
@@ -54,9 +54,13 @@ Two cases send the ordinary audit email instead. A scheduled run that fails send
 
 ### New broken links
 
-Arrives when a cloud audit of the website reports links broken that the website's previous audit did not report broken. Internal links the audit reports broken (an error status such as 404, 410 or 500) count, and so do external links the link checker confirmed broken. A link the checker could not verify (the site blocked the check, rate limited it, or timed out) never sends this alert.
+Arrives when a [scheduled audit](/cloud/scheduled-audits) of the website finds links broken that the previous scheduled audit checked and did not find broken. Internal links that answer a 404 or 410 count, and so do external links the link checker confirmed broken. These never send it:
+- a link the checker could not verify, because the site blocked the check, rate limited it or timed out;
+- an internal link behind a sign-in (401 or 403), or one that answered a server error once.
 
-The email lists up to 10 of the newly broken links and links to the run's report, which shows every broken link and the pages it is on. One audit sends at most one of these, and a website's first audit never sends one, because there is nothing to compare it with. It arrives alongside the run's audit complete or digest email: that one reports the whole run, this one only the links that just broke. The same alert appears in the dashboard bell, in `list_notifications` over [MCP](/developers/mcp), and, for an organization's websites, on the `notification.created` [webhook](/cloud/webhooks#event-types).
+A link counts only when the previous scheduled audit ran the same check and crawled a page the link is on now. A deeper crawl, or a check you just switched on, does not report old breakage as new.
+
+The email lists up to 10 of the newly broken links and links to the run's report, which shows every broken link and the pages it is on. One audit sends at most one of these, and the first scheduled audit never sends one, because there is nothing to compare it with. It arrives alongside that run's [digest](#scheduled-audit-digest): the digest reports the whole run, this one only the links that just broke. Like the other alert emails it is held to one an hour and five a day per account, and one over the limit still reaches the dashboard bell. The same alert appears in the dashboard bell, in `list_notifications` over [MCP](/developers/mcp), and, for an organization's websites, on the `notification.created` [webhook](/cloud/webhooks#event-types).
 
 Broken link alerts are on Pro and Team, switched on for every website until you turn them off. On the Free plan the switch shows as an upgrade.
 
