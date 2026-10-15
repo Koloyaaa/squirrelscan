@@ -71,6 +71,8 @@ Since v2.3.0 the featurizer emits two node token streams in the same hash bucket
 
 ## The bundled artifact
 
+See [MODEL.md](./MODEL.md) for what the heads are, what they read, the precision per class and the known limitations.
+
 `assets/classifier-v2.json` is weights and thresholds. It holds no vocabulary: tokens are hashed into buckets before scoring, so the only strings in it are the format name, the featurizer version and class names. `assets/classifier-v2.manifest.json` records its sha256, size and featurizer version. `tests/artifact-contents.test.ts` fails if any other string appears.
 
 ## Cost
