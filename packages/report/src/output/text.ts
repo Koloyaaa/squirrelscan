@@ -43,7 +43,7 @@ import { wrapText } from "../utils";
 import { unfetchedNote } from "../coverage";
 import { lockedRulesMessage } from "../locked-rules";
 import { privateTargetLine } from "../private-target";
-import { notCheckedLines } from "../not-checked";
+import { notCheckedDetailLines } from "../not-checked";
 import { stripControlChars } from "@squirrelscan/core-contracts/control-chars";
 
 export interface TextRenderOptions {
@@ -112,6 +112,89 @@ function formatRateLimitedHosts(hosts: string[]): string {
   return `${hosts.slice(0, 2).join(", ")} and ${hosts.length - 2} other host(s)`;
 }
 
+/** The scope and coverage notes that qualify the score, one line each. */
+function scanDetailLines(report: AuditReport): string[] {
+  const out: string[] = [];
+  // #1829: coverage the crawl lost to throttling.
+  if (report.rateLimited && report.rateLimited.pages > 0) {
+    out.push(
+      `Rate limited: ${report.rateLimited.pages} page(s) not verified (${formatRateLimitedHosts(report.rateLimited.hosts)})${unfetchedNote(report.rateLimited.unfetched)}`,
+    );
+  }
+  // #1418: the seed redirected off its own site and was not followed, so the URL at the top is not
+  // where the redirect pointed. stripControlChars because the redirect target is a string the
+  // audited site chose and this output reaches a terminal.
+  const seedRedirect = seedRedirectLine(report);
+  if (seedRedirect) out.push(stripControlChars(seedRedirect));
+  const scope = scanScopeLine(report);
+  if (scope) out.push(scope);
+  // repo#2661: a capped published report lists samples; say so, and where the rest is.
+  const capped = publishedReportNote(report);
+  if (capped) out.push(capped);
+  const level = auditLevelLine(report);
+  if (level) out.push(level);
+  const cov = coverageLine(report);
+  if (cov) out.push(cov);
+  // pub#629: the score's other basis line, the rules a private host skipped.
+  const privateTarget = privateTargetLine(report);
+  if (privateTarget) out.push(privateTarget);
+  const hint = fullScanHint(report);
+  if (hint) out.push(hint);
+  const fallbacks = fetchFallbacksLine(report);
+  if (fallbacks) out.push(fallbacks);
+  return out;
+}
+
+/**
+ * REPORT DETAIL: what this audit did not check (so a skipped check never reads as clean), the page
+ * structure, then the scope and coverage notes. Writes nothing when there is none of it.
+ */
+function writeReportDetail(report: AuditReport, write: (line?: string) => void): void {
+  const notChecked = notCheckedDetailLines(report);
+  const scan = scanDetailLines(report);
+  const structure = report.structure;
+  if (notChecked.length === 0 && scan.length === 0 && !structure) return;
+
+  write("REPORT DETAIL");
+  write("-".repeat(40));
+  if (notChecked.length > 0) {
+    write("Not checked");
+    for (const line of notChecked) write(`  - ${line}`);
+    write("");
+  }
+  if (structure) {
+    write("Page structure");
+    const typesLine = structurePageTypesLine(structure);
+    if (typesLine) {
+      write(typesLine);
+      write("");
+    }
+    const rows = structureRows(structure);
+    if (rows.length > 0) {
+      const width = Math.max("Section".length, ...rows.map((r) => r.section.length));
+      write(`${"Section".padEnd(width)}  ${"Pages".padStart(7)}  ${"Links".padStart(8)}`);
+      for (const row of rows) {
+        write(
+          `${row.section.padEnd(width)}  ${structureNumber(row.pages).padStart(7)}  ${structureNumber(row.links).padStart(8)}`,
+        );
+      }
+      write("");
+    }
+    const totals = structureTotalsLine(structure);
+    if (totals) write(totals);
+    const chromeLine = structureChromeLine(structure);
+    if (chromeLine) write(chromeLine);
+    const degradedLine = structureDegradedLine(structure);
+    if (degradedLine) write(degradedLine);
+    write("");
+  }
+  if (scan.length > 0) {
+    write("Scan details");
+    for (const line of scan) write(`  - ${line}`);
+    write("");
+  }
+}
+
 export function renderText(report: AuditReport, options?: TextRenderOptions): string {
   const lines: string[] = [];
   const version = options?.version ?? "";
@@ -127,39 +210,6 @@ export function renderText(report: AuditReport, options?: TextRenderOptions): st
   write("=".repeat(60));
   write(`Auditing: ${report.baseUrl}`);
   write(`Crawled ${report.totalPages} pages`);
-  // #1829: coverage the crawl lost to throttling. Printed next to the page
-  // count because it is the caveat on that number — a multi-site operator has
-  // to be able to see at a glance whether the total is the whole site.
-  if (report.rateLimited && report.rateLimited.pages > 0) {
-    write(
-      `Rate limited: ${report.rateLimited.pages} page(s) not verified (${formatRateLimitedHosts(report.rateLimited.hosts)})${unfetchedNote(report.rateLimited.unfetched)}`,
-    );
-  }
-  // #1418: the seed redirected off its own site and was not followed, so the
-  // line above is not where the redirect pointed. stripControlChars because the
-  // redirect target is a string the audited site chose and this output reaches
-  // a terminal (seedRedirectLine already drops whitespace/C0 from the URL; this
-  // is the same belt-and-braces every other page-derived line here gets).
-  const seedRedirect = seedRedirectLine(report);
-  if (seedRedirect) write(stripControlChars(seedRedirect));
-  const scope = scanScopeLine(report);
-  if (scope) write(scope);
-  // repo#2661: a capped published report lists samples; say so, and where the rest is.
-  const capped = publishedReportNote(report);
-  if (capped) write(capped);
-  const level = auditLevelLine(report);
-  if (level) write(level);
-  const cov = coverageLine(report);
-  if (cov) write(cov);
-  // pub#629: the score's other basis line, the rules a private host skipped.
-  const privateTarget = privateTargetLine(report);
-  if (privateTarget) write(privateTarget);
-  // repo#2729: checks this audit did not run, so a skipped check never reads as clean.
-  for (const line of notCheckedLines(report)) write(line);
-  const hint = fullScanHint(report);
-  if (hint) write(hint);
-  const fallbacks = fetchFallbacksLine(report);
-  if (fallbacks) write(fallbacks);
   write("");
 
   // Editor's summary — report-only (Pro exec-email narrative; not part of the score).
@@ -268,36 +318,6 @@ export function renderText(report: AuditReport, options?: TextRenderOptions): st
         .join(", ");
       write(`${group.emoji} ${group.label}: ${names}`);
     }
-    write("");
-  }
-
-  // Page structure (#2307) — report-only, never part of the score.
-  if (report.structure) {
-    const structure = report.structure;
-    write("PAGE STRUCTURE");
-    write("-".repeat(40));
-    const typesLine = structurePageTypesLine(structure);
-    if (typesLine) {
-      write(typesLine);
-      write("");
-    }
-    const rows = structureRows(structure);
-    if (rows.length > 0) {
-      const width = Math.max("Section".length, ...rows.map((r) => r.section.length));
-      write(`${"Section".padEnd(width)}  ${"Pages".padStart(7)}  ${"Links".padStart(8)}`);
-      for (const row of rows) {
-        write(
-          `${row.section.padEnd(width)}  ${structureNumber(row.pages).padStart(7)}  ${structureNumber(row.links).padStart(8)}`,
-        );
-      }
-      write("");
-    }
-    const totals = structureTotalsLine(structure);
-    if (totals) write(totals);
-    const chromeLine = structureChromeLine(structure);
-    if (chromeLine) write(chromeLine);
-    const degradedLine = structureDegradedLine(structure);
-    if (degradedLine) write(degradedLine);
     write("");
   }
 
@@ -445,6 +465,9 @@ export function renderText(report: AuditReport, options?: TextRenderOptions): st
       write("");
     }
   }
+
+  // Report detail: the last section, after every finding (see the markdown renderer).
+  writeReportDetail(report, write);
 
   write("=".repeat(60));
   write(`${report.passed} passed, ${report.warnings} warnings, ${report.failed} failed`);

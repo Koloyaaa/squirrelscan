@@ -149,6 +149,8 @@ export {
 
 // Checks that did not run for this audit: link checks off, links not followed (repo#2729)
 export {
+  notCheckedDetailLine,
+  notCheckedDetailLines,
   notCheckedLine,
   notCheckedLines,
   notCheckedRules,

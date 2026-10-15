@@ -691,9 +691,9 @@ A consumer that closes a finding when a rule stops reporting it should leave the
 | `name` | Rule display name |
 | `check` | Check name within the rule |
 | `reason` | `external-links-not-checked`: external link checking was off (`--offline`, `--no-external-links`, `[external_links] enabled = false`, or switched off for the website or run). `external-links-over-cap`: more external links than the audit's limit (`[external_links] max_links`, by default the page budget or 200, whichever is more); the most-linked were checked. `external-links-out-of-time`: a cloud audit's link check ran out of time, or waited too long on one request, before these links were answered. `link-targets-not-fetched`: the crawl did not follow links (Quick level, Sitemap crawl strategy) and some internal link targets were fetched neither by the crawl nor by the internal link check (one `HEAD` per target, on by default; `[internal_links] enabled = false` or `--no-internal-links` turns it off) |
-| `message` | The line every report format shows, e.g. `Not checked: Broken External Links. External link checking was off for this audit, so 12 external link(s) on the audited pages were not checked. Turn external link checks on to check them: in the CLI pass --external-links (or drop --no-external-links, --offline, or external_links.enabled = false); in the cloud they are a website setting.` |
+| `message` | The line the JSON, XML and LLM reports carry, e.g. `Not checked: Broken External Links. External link checking was off for this audit, so 12 external link(s) on the audited pages were not checked. Turn external link checks on to check them: in the CLI pass --external-links (or drop --no-external-links, --offline, or external_links.enabled = false); in the cloud they are a website setting.` |
 
-The text, Markdown and HTML reports print the same `Not checked:` line under the score, and the LLM and XML reports have a `<not-checked>` element with one `<rule>` per entry. A consumer that closes a finding when a rule stops reporting it should leave findings for these rules open.
+The console, text, Markdown and HTML reports list each notice, without the `Not checked:` lead-in, under a Not checked heading in [Report detail](#report-detail) at the end of the report. The LLM report has a `<not-checked>` element with one `<rule>` per entry inside its `<report-detail>` element, and the XML report has the same element at the top level of the document. A consumer that closes a finding when a rule stops reporting it should leave findings for these rules open.
 
 **Use for:**
 - Automated analysis
@@ -703,14 +703,22 @@ The text, Markdown and HTML reports print the same `Not checked:` line under the
 
 ---
 
-### Page structure
+### Report detail
 
-Every report format can carry a Page structure block: where the links on your pages sit (the header, footer, navigation, sidebar, page content and so on) and what type of page each one is. It is informational and never part of the score.
+The console, text, Markdown, HTML and LLM reports end with a Report detail section. It holds the notes about the audit itself, so the top of the report stays the title, URL, date, page count and version, then the score, the summary and the issues. It leaves out whatever it has nothing to say about, and is absent when it has nothing at all. In order, it has:
 
-It is computed over the pages that answered with a 2xx status, from link sections that page markup and the bundled [page classifier](/configuration/classifier) give each link. It needs a crawl made with a version of squirrel that records link sections: a report built from an older crawl has no Page structure block. With the classifier off (`[classifier] enabled = false`) the block still appears from markup alone, and shows no page types.
+- **Not checked**: one list item per check this audit did not run, so a skipped check never reads as clean. See `notChecked` in the JSON schema above.
+- **Page structure**: where the links on the audited pages sit, below.
+- **Scan details**: the notes that qualify the score. Pages the host rate limited, a refused off-site seed redirect, the scan scope, the audit level, smart-audit coverage, the local or private host note, the partial scan hint, and pages recovered by a direct fetch.
 
 ```text
-## Page structure
+## Report detail
+
+### Not checked
+
+- Broken External Links. External link checking was off for this audit, so 12 external link(s) on the audited pages were not checked. Turn external link checks on to check them: in the CLI pass --external-links, or run a Surface or Full audit, without --offline; in the cloud they are a website setting.
+
+### Page structure
 
 Page types: 20 product pages, 6 blog posts, 2 contact pages; 30 not classified.
 
@@ -725,16 +733,29 @@ Page types: 20 product pages, 6 blog posts, 2 contact pages; 30 not classified.
 2,311 links counted; 35 could not be placed in a section.
 
 88% of internal links sit in the header, footer, navigation and sidebar; 12% in the page content.
+
+### Scan details
+
+- Scan: 100 pages crawled from the CLI v0.0.76 (page limit 100 reached)
 ```
 
-What each number means:
+The JSON and XML reports keep every one of these as data fields where they were: `notChecked`, `structure`, `meta` and the rest. The LLM report ends with a `<report-detail>` element that holds `<not-checked>` and `<page-structure>`. Its scan notes stay where they were, as the `<rate-limited>`, `<seed-redirect>`, `<scan-scope>`, `<coverage>` and `<audit-level>` elements, because an agent needs them before it reads the issues.
+
+#### Page structure
+
+Every report can carry a Page structure block: where the links on your pages sit (the header, footer, navigation, sidebar, page content and so on) and what type of page each one is. It is informational and never part of the score.
+
+It is computed over the pages that answered with a 2xx status, from link sections that page markup and the bundled [page classifier](/configuration/classifier) give each link. It needs a crawl made with a version of squirrel that records link sections: a report built from an older crawl has no Page structure block. With the classifier off (`[classifier] enabled = false`) the block still appears from markup alone, and shows no page types.
+
+
+What each number means in the Page structure example above:
 
 - **Pages** is the audited pages with at least one link in that section. **Links** is every link in that section, summed over those pages. Each anchor counts, repeats included, so a footer link on 58 pages is 58 links.
 - **Could not be placed** is links that neither the markup nor the classifier could assign to a section. They are counted in the total but not listed as a section.
 - **Chrome share** is internal links in the header, footer, navigation and sidebar, divided by those plus internal links in the page content. Links in other sections, such as the pagination or the comments, are left out of both sides. A share near 1 means almost every internal link on the site is repeated site furniture, which is common and not a problem by itself. It is the context for findings such as [links/no-contextual-inbound](/rules/links/no-contextual-inbound).
 - **Page types** are counted only where squirrel stands behind the label: an answer from the classifier's model, or an answer from the page markup at 0.8 confidence or more. A page with no answer, the label `unknown` or a weaker markup answer counts as not classified. The labels are `homepage`, `product_detail`, `product_listing`, `article`, `blog_post`, `about`, `contact`, `docs`, `legal`, `pricing`, `listing_index` and `other`.
 
-The console, text, Markdown, HTML, XML and LLM reports print the block after the technologies, and leave it out when there is nothing to show. The LLM and XML reports use a `<page-structure>` element with one `<section>` per row. In the JSON report it is the `structure` key:
+The block sits in Report detail, and is left out when there is nothing to show. The LLM and XML reports use a `<page-structure>` element with one `<section>` per row. In the JSON report it is the `structure` key:
 
 | Field | Meaning |
 |-------|---------|

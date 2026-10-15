@@ -268,7 +268,7 @@ describe("page structure in the output formats", () => {
   test("markdown: a section with the page types, the table and the chrome share", () => {
     const md = renderMarkdown(withStructure);
 
-    expect(md).toContain("## Page structure");
+    expect(md).toContain("### Page structure");
     expect(md).toContain("Page types: 2 product pages, 1 contact page, 1 homepage; 3 not classified.");
     expect(md).toContain("| Section | Pages | Links |");
     expect(md).toContain("| Footer | 5 | 30 |");
@@ -284,7 +284,7 @@ describe("page structure in the output formats", () => {
     expect(md.indexOf("| Content |")).toBeLessThan(md.indexOf("| Navigation |"));
   });
 
-  test("markdown: after the technologies block, before the summary", () => {
+  test("markdown: inside Report detail, the last section, after every issue", () => {
     const md = renderMarkdown(
       report({
         structure: STRUCTURE,
@@ -294,12 +294,14 @@ describe("page structure in the output formats", () => {
           removed: [],
           firstScan: true,
         },
-      })
+      }),
     );
 
-    expect(md.indexOf("## Technologies")).toBeGreaterThan(-1);
-    expect(md.indexOf("## Technologies")).toBeLessThan(md.indexOf("## Page structure"));
-    expect(md.indexOf("## Page structure")).toBeLessThan(md.indexOf("## Summary"));
+    expect(md.indexOf("## Summary")).toBeLessThan(md.indexOf("## Report detail"));
+    expect(md.indexOf("## Technologies")).toBeLessThan(md.indexOf("## Report detail"));
+    expect(md.indexOf("## Report detail")).toBeLessThan(md.indexOf("### Page structure"));
+    // Nothing of it above the score.
+    expect(md.slice(0, md.indexOf("## Summary"))).not.toContain("Page structure");
   });
 
   test("no em-dash anywhere in the block, in any text format", () => {
@@ -309,16 +311,17 @@ describe("page structure in the output formats", () => {
     const txt = renderText(withStructure);
     const llm = renderLlm(withStructure);
 
-    expect(block(md, "## Page structure", "## Summary")).not.toContain("—");
-    expect(block(txt, "PAGE STRUCTURE", "SUMMARY")).not.toContain("—");
+    expect(block(md, "### Page structure", "\n---\n")).not.toContain("—");
+    expect(block(txt, "Page structure", "==========")).not.toContain("—");
     expect(block(llm, "<page-structure", "</page-structure>")).not.toContain("—");
-    expect(block(md, "## Page structure", "## Summary").length).toBeGreaterThan(200);
+    expect(block(md, "### Page structure", "\n---\n").length).toBeGreaterThan(200);
   });
 
   test("text: the same three pieces", () => {
     const text = renderText(withStructure);
 
-    expect(text).toContain("PAGE STRUCTURE");
+    expect(text).toContain("REPORT DETAIL");
+    expect(text).toContain("Page structure\n");
     expect(text).toContain("Page types: 2 product pages, 1 contact page, 1 homepage; 3 not classified.");
     expect(text).toMatch(/Footer\s+5\s+30/);
     expect(text).toContain(
@@ -403,7 +406,8 @@ describe("page structure in the output formats", () => {
   test("html: a section with the sentences and one badge per section", () => {
     const html = renderHtml(withStructure);
 
-    expect(html).toContain("<h2>Page structure</h2>");
+    expect(html).toContain("<h2>Report detail</h2>");
+    expect(html).toContain("<h3>Page structure</h3>");
     expect(html).toContain("Page types: 2 product pages, 1 contact page, 1 homepage; 3 not classified.");
     expect(html).toContain("30 links on 5 pages");
     expect(html).toContain("2 links on 1 page<");
@@ -413,7 +417,7 @@ describe("page structure in the output formats", () => {
     const plain = report();
 
     expect(renderMarkdown(plain)).not.toContain("Page structure");
-    expect(renderText(plain)).not.toContain("PAGE STRUCTURE");
+    expect(renderText(plain)).not.toContain("Page structure");
     expect(renderLlm(plain)).not.toContain("page-structure");
     expect(renderXml(plain)).not.toContain("page-structure");
     expect(renderHtml(plain)).not.toContain("Page structure");
@@ -424,7 +428,7 @@ describe("page structure in the output formats", () => {
     const sparse = build([scalars({ sections: { pagination: 2 }, chrome: 0, content: 0 })])!;
     const md = renderMarkdown(report({ structure: sparse }));
 
-    expect(md).toContain("## Page structure");
+    expect(md).toContain("### Page structure");
     expect(md).toContain("| Pagination | 1 | 2 |");
     expect(md).not.toContain("Page types:");
     expect(md).not.toContain("of internal links sit");

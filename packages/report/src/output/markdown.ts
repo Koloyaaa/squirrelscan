@@ -45,7 +45,7 @@ import { formatReportDate } from "../utils";
 import { getPathname } from "../url";
 import { lockedRulesMessage } from "../locked-rules";
 import { privateTargetLine } from "../private-target";
-import { notCheckedLines } from "../not-checked";
+import { notCheckedDetailLines } from "../not-checked";
 
 /** repo#2661: ", N more not listed" when the report left items out of a check. */
 function notListedSuffix(check: Parameters<typeof itemsNotListed>[0]): string {
@@ -144,6 +144,119 @@ function formatRateLimitedHosts(hosts: string[]): string {
   return `${hosts.slice(0, 2).join(", ")} and ${hosts.length - 2} other host(s)`;
 }
 
+/**
+ * A not-checked notice as list-item content. It opens with a rule name, which a stored report can
+ * set to anything, so a name like `1` or `# x` would open a nested list or a heading. The
+ * block-opening character is escaped; the rest goes through the inline escaper.
+ */
+function escapeListItem(value: string): string {
+  const text = escapeMarkdownInline(value);
+  return text.replace(/^(\d+)([.)])/, "$1\\$2").replace(/^([#>+-])/, "\\$1");
+}
+
+/**
+ * The scope and coverage notes that qualify the score, one plain list item each. They used to run
+ * under the title; they are run metadata, so they close the report instead.
+ */
+function scanDetailLines(report: AuditReport): string[] {
+  const out: string[] = [];
+  // #1829: coverage lost to throttling.
+  if (report.rateLimited && report.rateLimited.pages > 0) {
+    out.push(
+      `Rate limited: ${report.rateLimited.pages} page(s) not verified (${formatRateLimitedHosts(report.rateLimited.hosts)})${unfetchedNote(report.rateLimited.unfetched)}`,
+    );
+  }
+  // #1418: the seed redirected off its own site and the crawler refused to follow it, so the URL at
+  // the top is not where the redirect pointed. Escaped: the redirect target is a string the audited
+  // site chose.
+  const seedRedirect = seedRedirectLine(report);
+  if (seedRedirect) out.push(escapeMarkdownInline(seedRedirect));
+  const scope = scanScopeLine(report);
+  if (scope) out.push(scope);
+  // repo#2661: a capped published report lists samples; say so, and where the rest is. Not
+  // escaped: the note is our own text and its backticks are meant as code.
+  const capped = publishedReportNote(report);
+  if (capped) out.push(capped);
+  const level = auditLevelLine(report);
+  if (level) out.push(level);
+  const cov = coverageLine(report);
+  if (cov) out.push(cov);
+  // pub#629: the score's other basis line, the rules a private host skipped.
+  const privateTarget = privateTargetLine(report);
+  if (privateTarget) out.push(privateTarget);
+  const hint = fullScanHint(report);
+  if (hint) out.push(hint);
+  const fallbacks = fetchFallbacksLine(report);
+  if (fallbacks) out.push(fallbacks);
+  return out;
+}
+
+/** The Page structure block (#2307), as lines under a "###" heading. Empty without a block. */
+function structureLines(report: AuditReport): string[] {
+  const structure = report.structure;
+  if (!structure) return [];
+  const lines: string[] = ["### Page structure", ""];
+  const typesLine = structurePageTypesLine(structure);
+  if (typesLine) {
+    lines.push(typesLine);
+    lines.push("");
+  }
+  const rows = structureRows(structure);
+  if (rows.length > 0) {
+    lines.push("| Section | Pages | Links |");
+    lines.push("|---------|------:|------:|");
+    for (const row of rows) {
+      lines.push(
+        `| ${row.section} | ${structureNumber(row.pages)} | ${structureNumber(row.links)} |`,
+      );
+    }
+    lines.push("");
+  }
+  const totals = structureTotalsLine(structure);
+  if (totals) {
+    lines.push(totals);
+    lines.push("");
+  }
+  const chromeLine = structureChromeLine(structure);
+  if (chromeLine) {
+    lines.push(chromeLine);
+    lines.push("");
+  }
+  const degradedLine = structureDegradedLine(structure);
+  if (degradedLine) {
+    lines.push(degradedLine);
+    lines.push("");
+  }
+  return lines;
+}
+
+/**
+ * Report detail: the last section of the report. What this audit did not check (so a skipped check
+ * never reads as clean), the page structure, then the scope and coverage notes. Empty when there is
+ * nothing to say, so a report with none of these ends where it always did.
+ */
+function reportDetailLines(report: AuditReport): string[] {
+  const notChecked = notCheckedDetailLines(report);
+  const structure = structureLines(report);
+  const scan = scanDetailLines(report);
+  if (notChecked.length === 0 && structure.length === 0 && scan.length === 0) return [];
+
+  const lines: string[] = ["## Report detail", ""];
+  if (notChecked.length > 0) {
+    lines.push("### Not checked", "");
+    // Escaped: a published report's messages come from whoever published it.
+    for (const line of notChecked) lines.push(`- ${escapeListItem(line)}`);
+    lines.push("");
+  }
+  lines.push(...structure);
+  if (scan.length > 0) {
+    lines.push("### Scan details", "");
+    for (const line of scan) lines.push(`- ${line}`);
+    lines.push("");
+  }
+  return lines;
+}
+
 export function renderMarkdown(report: AuditReport, options?: MarkdownRenderOptions): string {
   const lines: string[] = [];
   const version = options?.version ?? "";
@@ -160,47 +273,6 @@ export function renderMarkdown(report: AuditReport, options?: MarkdownRenderOpti
   lines.push(`**URL:** ${report.baseUrl}  `);
   lines.push(`**Date:** ${formatReportDate(report.timestamp)}  `);
   lines.push(`**Pages:** ${report.totalPages}  `);
-  // #1829: the caveat on the page count above — coverage lost to throttling.
-  if (report.rateLimited && report.rateLimited.pages > 0) {
-    lines.push(
-      `**Rate limited:** ${report.rateLimited.pages} page(s) not verified (${formatRateLimitedHosts(report.rateLimited.hosts)})${unfetchedNote(report.rateLimited.unfetched)}  `,
-    );
-  }
-  // #1418: the seed redirected off its own site and the crawler refused to
-  // follow it, so the URL above is not where the redirect pointed. Escaped:
-  // the redirect target is a string the audited site chose. Deliberately a
-  // plain line and not a `>` blockquote — CommonMark lazy continuation would
-  // pull every metadata line below it inside the quote.
-  const seedRedirect = seedRedirectLine(report);
-  if (seedRedirect) lines.push(`${escapeMarkdownInline(seedRedirect)}  `);
-  const scope = scanScopeLine(report);
-  if (scope) lines.push(`${scope}  `);
-  // repo#2661: a capped published report lists samples; say so, and where the rest is.
-  // Not escaped, unlike the seed-redirect line above: the note is our own text
-  // (its numbers are coerced from the stamp) and its backticks are meant as code.
-  const capped = publishedReportNote(report);
-  if (capped) lines.push(`${capped}  `);
-  const level = auditLevelLine(report);
-  if (level) lines.push(`${level}  `);
-  const cov = coverageLine(report);
-  if (cov) lines.push(`**${cov}**  `);
-  // pub#629: the score's other basis line, the rules a private host skipped.
-  const privateTarget = privateTargetLine(report);
-  if (privateTarget) lines.push(`${privateTarget}  `);
-  // repo#2729: checks this audit did not run, so a skipped check never reads as
-  // clean. Bold like the coverage line: both qualify what the score covers.
-  // Escaped: a published report's messages come from whoever published it.
-  for (const line of notCheckedLines(report)) lines.push(`**${escapeMarkdownInline(line)}**  `);
-  // #190: a plain line for the same reason the seed-redirect disclosure above
-  // is one. This used to be `> ${hint}`, and a blockquote CAN interrupt an open
-  // paragraph, so the quote opened mid-metadata and CommonMark lazy
-  // continuation swallowed every line under it — a partial scan rendered its
-  // recovery note and its generator version as part of the warning. Text and
-  // HTML both render this hint as a plain line; markdown was the odd one out.
-  const hint = fullScanHint(report);
-  if (hint) lines.push(`${hint}  `);
-  const fallbacks = fetchFallbacksLine(report);
-  if (fallbacks) lines.push(`${fallbacks}  `);
   if (version) lines.push(`**Version:** ${version}`);
   lines.push("");
 
@@ -345,45 +417,6 @@ export function renderMarkdown(report: AuditReport, options?: MarkdownRenderOpti
       });
       lines.push(`**${group.emoji} ${group.label}**  `);
       lines.push(cells.join(" · "));
-      lines.push("");
-    }
-  }
-
-  // Page structure (#2307) — report-only, never part of the score. Placed after the
-  // technologies block; absent when no audited page carried link sections or a page type.
-  if (report.structure) {
-    const structure = report.structure;
-    lines.push("## Page structure");
-    lines.push("");
-    const typesLine = structurePageTypesLine(structure);
-    if (typesLine) {
-      lines.push(typesLine);
-      lines.push("");
-    }
-    const rows = structureRows(structure);
-    if (rows.length > 0) {
-      lines.push("| Section | Pages | Links |");
-      lines.push("|---------|------:|------:|");
-      for (const row of rows) {
-        lines.push(
-          `| ${row.section} | ${structureNumber(row.pages)} | ${structureNumber(row.links)} |`,
-        );
-      }
-      lines.push("");
-    }
-    const totals = structureTotalsLine(structure);
-    if (totals) {
-      lines.push(totals);
-      lines.push("");
-    }
-    const chromeLine = structureChromeLine(structure);
-    if (chromeLine) {
-      lines.push(chromeLine);
-      lines.push("");
-    }
-    const degradedLine = structureDegradedLine(structure);
-    if (degradedLine) {
-      lines.push(degradedLine);
       lines.push("");
     }
   }
@@ -615,6 +648,10 @@ export function renderMarkdown(report: AuditReport, options?: MarkdownRenderOpti
       lines.push("");
     }
   }
+
+  // Report detail: the last section, after every finding. What this audit did not check, the
+  // page structure, and the scope and coverage notes that qualify the score.
+  lines.push(...reportDetailLines(report));
 
   // White-label drops the squirrelscan "Generated by" credit line entirely.
   if (!whiteLabel) {
