@@ -48,8 +48,38 @@ export function sectionPhrase(counts: SectionCounts): string {
   return list ? `in ${list}` : "";
 }
 
-/** "from the footer and the navigation"; "" when no section is known. */
-export function sectionFromPhrase(counts: SectionCounts): string {
-  const list = sectionList(counts);
-  return list ? `from ${list}` : "";
+/** "the footer, the navigation and the breadcrumbs": up to three names, then "and N more". */
+function nameList(names: string[]): string {
+  if (names.length <= 1) return names.join("");
+  if (names.length <= 3) return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return `${names.slice(0, 3).join(", ")} and ${names.length - 3} more`;
+}
+
+/**
+ * Where the links to a page that only sitewide chrome points at sit (#2307), for
+ * `links/no-contextual-inbound`. The decision that the page is chrome-only is the `isChrome`
+ * flag (a `nav`, `header`, `footer` or `aside` ancestor); this says what the sections were.
+ *
+ * Every section but `content` is named. Links the section rules read as `content` are template
+ * links: an anchor inside a post's own `<footer>` ("Back to the journal") is chrome by tag and
+ * content by section. They are counted apart and never named as a place the page is linked
+ * "only from".
+ *
+ * "linked only from the footer, the navigation and the breadcrumbs, and 22 template links inside
+ * the page content". `complete` is true when every counted inbound link had a section; without it
+ * the phrase drops "only". "" when there is nothing to say.
+ */
+export function chromeSectionPhrase(counts: SectionCounts, complete: boolean): string {
+  const named = (Object.keys(counts) as (keyof SectionCounts)[])
+    .filter((section) => section !== "content" && (counts[section] ?? 0) > 0)
+    .sort((a, b) => (counts[b] ?? 0) - (counts[a] ?? 0) || a.localeCompare(b));
+  const content = counts.content ?? 0;
+  const template =
+    content > 0
+      ? `${content} template ${content === 1 ? "link" : "links"} inside the page content`
+      : "";
+  const lead = complete ? "linked only" : "linked";
+  if (named.length === 0) return template ? `${lead} by ${template}` : "";
+  const places = nameList(named.map((section) => PHRASE[section]));
+  return `${lead} from ${places}${template ? `, and ${template}` : ""}`;
 }
