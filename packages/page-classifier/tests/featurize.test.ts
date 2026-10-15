@@ -13,6 +13,8 @@
 //  4. The cost is linear and small enough for the < 5 ms/page budget.
 
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { parseHTML } from "@squirrelscan/parser/dom";
 import {
@@ -21,6 +23,7 @@ import {
   featurizePage,
   featureSchema,
   fnv1a32,
+  mergeTokens,
   NODE_FEATURE_NAMES,
   PAGE_FEATURE_NAMES,
   TOKEN_BUCKETS,
@@ -705,5 +708,240 @@ describe("microdata never reaches a feature", () => {
     }
     expect([...b.page.features]).toEqual([...a.page.features]);
     expect(b.page.tokens).toEqual(a.page.tokens);
+  });
+});
+
+describe("the class/id token stream is unchanged since v2.2.0", () => {
+  // The region head was trained on the v2.2.0 `tokens` and the page-type head on the page tokens; both must keep reading exactly
+  // that. The golden file was produced by the v2.2.0 featurizer on the fixture pages.
+  const golden = JSON.parse(
+    readFileSync(join(import.meta.dir, "fixtures", "tokens-v2.2.0.json"), "utf8"),
+  ) as { pages: Record<string, Array<[number, number[], number[]]>> };
+
+  for (const [file, expected] of Object.entries(golden.pages)) {
+    test(`${file}: tokens and maskedTokens equal the v2.2.0 output`, () => {
+      const html = readFileSync(join(import.meta.dir, "fixtures", file), "utf8");
+      const nodes = featurizePage(html, "https://example.com/", { emitMasked: true }).nodes;
+      expect(nodes.map((n) => [n.nodeId, n.tokens, n.maskedTokens])).toEqual(expected);
+    });
+  }
+});
+
+describe("text and attribute tokens (v2.3.0)", () => {
+  const wrap = (body: string): string =>
+    `<!doctype html><html><head><title>T</title></head><body>${body}</body></html>`;
+  /** The token buckets of the first candidate whose tag matches. */
+  const tokensOfFirst = (html: string, tag: string, options = {}): number[] => {
+    const node = featurizePage(wrap(html), URL, options).nodes.find((n) => n.tag === tag);
+    if (!node) throw new Error(`no candidate <${tag}>`);
+    return mergeTokens(node.tokens, node.textTokens);
+  };
+  const has = (tokens: number[], token: string): boolean => tokens.includes(tokenBucket(token));
+
+  test("the version is stamped and the dense vector is unchanged", () => {
+    expect(featureSchema().featurizerVersion).toBe("v2.3.0");
+    expect(NODE_FEATURE_NAMES.length).toBe(197);
+    expect(String((featureSchema().tokenHash as { note: string }).note)).toContain("t: own-text");
+  });
+
+  test("own-text words become t: tokens; one-letter words and digits do not", () => {
+    const tokens = tokensOfFirst(`<div>Subscribe to our Newsletter 24 x for updates</div>`, "div");
+    for (const word of ["subscribe", "to", "our", "newsletter", "for", "updates"]) {
+      expect(has(tokens, `t:${word}`)).toBe(true);
+    }
+    // a bare "x" (one letter) and "24" are not words
+    expect(has(tokens, "t:x")).toBe(false);
+  });
+
+  test("only the first 12 own-text words count", () => {
+    const first12 = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima";
+    const a = tokensOfFirst(`<div>${first12} zulu</div>`, "div");
+    const b = tokensOfFirst(`<div>${first12} yankee</div>`, "div");
+    const c = tokensOfFirst(`<div>${first12.replace("lima", "mike")} zulu</div>`, "div");
+    expect(b).toEqual(a);
+    expect(c).not.toEqual(a);
+  });
+
+  test("words are Unicode letters, lowercased", () => {
+    const tokens = tokensOfFirst(
+      `<div>Abonnieren Sie unseren NEWSLETTER für Neuigkeiten</div>`,
+      "div",
+    );
+    expect(has(tokens, "t:für")).toBe(true);
+    expect(has(tokens, "t:newsletter")).toBe(true);
+  });
+
+  test("text of a descendant is not the node's own text", () => {
+    const outer = tokensOfFirst(
+      `<div><p>Subscribe to our newsletter today</p><p>Second paragraph</p></div>`,
+      "div",
+    );
+    expect(has(outer, "t:subscribe")).toBe(false);
+  });
+
+  test("aria-label words become a: tokens", () => {
+    const tokens = tokensOfFirst(
+      `<div aria-label="Share this article"><p>One</p><p>Two</p></div>`,
+      "div",
+    );
+    expect(has(tokens, "a:share")).toBe(true);
+    expect(has(tokens, "t:share")).toBe(false);
+  });
+
+  test("rel values of the node and its descendant anchors become r: tokens", () => {
+    const tokens = tokensOfFirst(
+      `<div><a href="/p/2" rel="next nofollow">Next</a><a href="/p/0" rel="prev">Prev</a></div>`,
+      "div",
+    );
+    for (const rel of ["next", "nofollow", "prev"]) expect(has(tokens, `r:${rel}`)).toBe(true);
+    const plain = tokensOfFirst(`<div><a href="/p/2">Next</a><a href="/p/0">Prev</a></div>`, "div");
+    expect(has(plain, "r:next")).toBe(false);
+  });
+
+  test("anchor hosts map to the short list; other hosts add nothing", () => {
+    const tokens = tokensOfFirst(
+      `<div><a href="https://www.facebook.com/sharer/sharer.php?u=x">f</a>
+        <a href="https://x.com/intent/tweet">t</a><a href="//wa.me/?text=hi">w</a>
+        <a href="mailto:a@b.example">m</a><a href="tel:+100">p</a></div>`,
+      "div",
+    );
+    for (const host of ["facebook", "twitter", "whatsapp", "mailto", "tel"]) {
+      expect(has(tokens, `h:${host}`)).toBe(true);
+    }
+    const other = tokensOfFirst(
+      `<div><a href="https://example.org/a">a</a><a href="https://notfacebook.com/b">b</a></div>`,
+      "div",
+    );
+    expect(has(other, "h:facebook")).toBe(false);
+  });
+
+  test("rel values come from the first 20 anchors of the subtree only", () => {
+    const filler = Array.from({ length: 19 }, (_, i) => `<a href="/x${i}">x${i}</a>`).join("");
+    const inside = tokensOfFirst(
+      `<div class="first">${filler}<a href="/y" rel="next">y</a></div>`,
+      "div",
+    );
+    expect(has(inside, "r:next")).toBe(true); // the 20th anchor
+    const beyond = tokensOfFirst(
+      `<div class="first">${filler}<a href="/y">y</a><a href="/z" rel="prev">z</a></div>`,
+      "div",
+    );
+    expect(has(beyond, "r:prev")).toBe(false); // the 21st
+  });
+
+  test("anchor hosts are scoped to the subtree and to its first 60 elements", () => {
+    const pair = featurizePage(
+      wrap(
+        `<div class="first"><a href="https://t.me/s">t</a><a href="/z">z</a></div><div class="second"><p>Sibling text long enough to be a candidate.</p></div>`,
+      ),
+      URL,
+    ).nodes;
+    const first = pair.find((n) => has(n.tokens, "s:first"));
+    const second = pair.find((n) => has(n.tokens, "s:second"));
+    expect(has(mergeTokens(first!.tokens, first!.textTokens), "h:telegram")).toBe(true);
+    expect(has(mergeTokens(second!.tokens, second!.textTokens), "h:telegram")).toBe(false);
+    const spans = Array.from({ length: 70 }, (_, i) => `<span>s${i}</span>`).join("");
+    const early = tokensOfFirst(
+      `<div class="wide"><a href="https://t.me/s">t</a>${spans}</div>`,
+      "div",
+    );
+    expect(has(early, "h:telegram")).toBe(true);
+    const late = tokensOfFirst(
+      `<div class="wide">${spans}<a href="https://t.me/s">t</a></div>`,
+      "div",
+    );
+    expect(has(late, "h:telegram")).toBe(false); // element 72, past the 60-element window
+  });
+
+  test("subtree words: text that lives only in the grandchildren reaches the container (st:)", () => {
+    const html = `<div class="outer"><section><p>Subscribe to our newsletter today</p></section><section><p>Weekly digest</p></section></div>`;
+    const tokens = tokensOfFirst(html, "div");
+    for (const word of ["subscribe", "newsletter", "weekly", "digest"]) {
+      expect(has(tokens, `st:${word}`)).toBe(true);
+    }
+    expect(has(tokens, "t:subscribe")).toBe(false); // not the container's OWN text
+  });
+
+  test("subtree words: only the first 12 words, and only the first 60 elements, are read", () => {
+    const first12 = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima";
+    const a = tokensOfFirst(`<div class="x1"><p>${first12}</p><p>zulu</p></div>`, "div");
+    const b = tokensOfFirst(`<div class="x1"><p>${first12}</p><p>yankee</p></div>`, "div");
+    expect(b).toEqual(a);
+    const spans = Array.from({ length: 70 }, () => `<span></span>`).join("");
+    const near = tokensOfFirst(`<div class="x2"><p>nearword</p>${spans}</div>`, "div");
+    const far = tokensOfFirst(`<div class="x2">${spans}<p>farword</p></div>`, "div");
+    expect(has(near, "st:nearword")).toBe(true);
+    expect(has(far, "st:farword")).toBe(false);
+  });
+
+  test("subtree words obey the label-word mask like t:", () => {
+    const html = `<div class="x3"><p>Site navigation and search</p><p>for you today</p></div>`;
+    const all = tokensOfFirst(html, "div", { mask: true, maskAll: true });
+    expect(has(all, "st:navigation")).toBe(false);
+    expect(has(all, "st:search")).toBe(false);
+    expect(has(all, "st:site")).toBe(true);
+  });
+
+  test("the label-word mask applies to the new words like class and id tokens", () => {
+    const html = `<div aria-label="Main navigation menu"><p>One</p><p>Two</p></div>`;
+    const plain = tokensOfFirst(html, "div");
+    expect(has(plain, "a:navigation")).toBe(true);
+    const all = tokensOfFirst(html, "div", { mask: true, maskAll: true });
+    expect(has(all, "a:navigation")).toBe(false);
+    expect(has(all, "a:menu")).toBe(true);
+    const text = tokensOfFirst(`<div>Site navigation and search for you</div>`, "div", {
+      mask: true,
+      maskAll: true,
+    });
+    expect(has(text, "t:navigation")).toBe(false);
+    expect(has(text, "t:search")).toBe(false);
+    expect(has(text, "t:site")).toBe(true);
+  });
+
+  test("`tokens` is exactly the class/id stream: the text channel never reaches it", () => {
+    const html = wrap(
+      `<div class="alpha beta" aria-label="Share this"><p>Subscribe to our newsletter today</p><a href="https://t.me/s" rel="next">t</a></div>`,
+    );
+    const node = featurizePage(html, URL).nodes.find((n) => n.tag === "div")!;
+    // the parent is <body> with no class: only the node's own class tokens
+    const legacy = [...new Set(["s:alpha", "s:beta"].map(tokenBucket))].sort((a, b) => a - b);
+    expect(node.tokens).toEqual(legacy);
+    expect(node.textTokens.length).toBeGreaterThan(0);
+    expect(has(node.textTokens, "t:subscribe")).toBe(false); // own text is empty (text sits in <p>)
+    expect(has(node.textTokens, "st:subscribe")).toBe(true);
+    expect(has(node.textTokens, "a:share")).toBe(true);
+    expect(has(node.textTokens, "r:next")).toBe(true);
+    expect(has(node.textTokens, "h:telegram")).toBe(true);
+  });
+
+  test("the masked variant keeps the same split", () => {
+    const html = wrap(
+      `<div class="footer nav alpha"><p>Navigation and site search for you</p></div>`,
+    );
+    const node = featurizePage(html, URL, { emitMasked: true }).nodes.find((n) => n.tag === "div")!;
+    expect(node.maskedTokens).toBeDefined();
+    expect(node.maskedTextTokens).toBeDefined();
+    const all = featurizePage(html, URL, { mask: true, maskAll: true }).nodes.find(
+      (n) => n.tag === "div",
+    )!;
+    expect(has(all.tokens, "s:footer")).toBe(false);
+    expect(has(all.tokens, "s:alpha")).toBe(true);
+    expect(has(all.textTokens, "st:navigation")).toBe(false);
+    expect(has(all.textTokens, "st:site")).toBe(true);
+  });
+
+  test("mergeTokens is the sorted unique union", () => {
+    expect(mergeTokens([1, 4, 9], [2, 4, 10])).toEqual([1, 2, 4, 9, 10]);
+    expect(mergeTokens([3], [])).toEqual([3]);
+    expect(mergeTokens([], [5, 6])).toEqual([5, 6]);
+  });
+
+  test("masked and unmasked tokens of the new channel are deterministic", () => {
+    const html = wrap(
+      `<div aria-label="Search the site"><a href="https://reddit.com/r/x" rel="noopener">r</a><p>Find things here today</p></div>`,
+    );
+    const a = featurizePage(html, URL, { emitMasked: true });
+    const b = featurizePage(html, URL, { emitMasked: true });
+    expect(JSON.stringify(b)).toBe(JSON.stringify(a));
   });
 });

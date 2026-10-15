@@ -67,6 +67,8 @@ The first four are page-wide. The budget is checked every 32 nodes and hands the
 
 The artifact records `featurizerVersion`, `nodeFeatureCount`, `pageFeatureCount` and `tokenBuckets`, and `classifyDocument` refuses a mismatched artifact. `FEATURIZER_VERSION` must change whenever the feature list, vocabulary, hash or candidate rule changes.
 
+Since v2.3.0 the featurizer emits two node token streams in the same hash buckets: the class and id stream (`tokens`) and an own-text, attribute and anchor-host stream (`textTokens`). A head declares which it reads with `tokenStreams` (`["classid"]` when absent, `["classid", "text"]` for the section head), so a head never silently receives input it was not trained on. A page-type head cannot declare `text`.
+
 ## The bundled artifact
 
 `assets/classifier-v2.json` is weights and thresholds. It holds no vocabulary: tokens are hashed into buckets before scoring, so the only strings in it are the format name, the featurizer version and class names. `assets/classifier-v2.manifest.json` records its sha256, size and featurizer version. `tests/artifact-contents.test.ts` fails if any other string appears.

@@ -28,8 +28,12 @@ const HEAD_KEYS = new Set([
   "numTrees",
   "extraFeatureNames",
   "platformClassThresholds",
+  "tokenStreams",
   "trees",
 ]);
+
+/** The node token streams a head may declare it reads (see model-format.ts). */
+const TOKEN_STREAMS = new Set(["classid", "text"]);
 
 const IDENT = /^[a-z][a-z0-9_]{0,63}$/;
 const VERSION = /^v\d+\.\d+\.\d+$/;
@@ -65,6 +69,11 @@ export function findStrayStrings(artifact: unknown): string[] {
       if (!IDENT.test(platform)) stray.push(`${name}.platformClassThresholds platform`);
       for (const [cls, value] of Object.entries(classes)) {
         if (!IDENT.test(cls) || typeof value !== "number") stray.push(`${name}.platform class`);
+      }
+    }
+    for (const stream of (head.tokenStreams as unknown[] | undefined) ?? []) {
+      if (typeof stream !== "string" || !TOKEN_STREAMS.has(stream)) {
+        stray.push(`${name}.tokenStreams entry`);
       }
     }
     if (typeof head.trees !== "string" || !TREE_BLOCK.test(head.trees)) {

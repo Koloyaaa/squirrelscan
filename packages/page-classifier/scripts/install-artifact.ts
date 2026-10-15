@@ -45,6 +45,7 @@ for (const head of ["region", "pageType", "section"] as const) {
         "numTrees",
         "extraFeatureNames",
         "platformClassThresholds",
+        "tokenStreams",
         "trees",
       ].includes(key),
     ),

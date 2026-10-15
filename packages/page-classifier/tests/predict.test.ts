@@ -16,6 +16,13 @@ import {
   softmax,
   thresholdsFor,
 } from "../src/model-format";
+import {
+  FEATURIZER_VERSION,
+  NODE_FEATURE_NAMES,
+  PAGE_FEATURE_NAMES,
+  TOKEN_BUCKETS,
+  tokenBucket,
+} from "../src/featurize";
 import { classifyPage, tryLoadModel, withExtraBlock } from "../src/predict";
 import { isRootPath } from "../src/rules-fallback";
 
@@ -248,6 +255,158 @@ describe("missing-value splits (tree-block version 2, #2307)", () => {
     expect(Number.isNaN(absent[2]!) && Number.isNaN(absent[3]!)).toBe(true);
     const short = withExtraBlock(base, 2, [3]);
     expect(Number.isNaN(short[2]!)).toBe(true);
+  });
+});
+
+/**
+ * A two-class head whose only split is on one input column: class 1 wins when the column is set, class 0 otherwise. `streams` is the
+ * head's declared `tokenStreams` (absent = the class/id stream only).
+ */
+function columnHead(
+  column: number,
+  classes: [string, string],
+  streams?: string[],
+  thresholds: [number, number] = [1.01, 0.5],
+): Record<string, unknown> {
+  const bytes: number[] = [];
+  const u32 = (v: number) => bytes.push(v & 255, (v >>> 8) & 255, (v >>> 16) & 255, v >>> 24);
+  const f32 = (v: number) => bytes.push(...new Uint8Array(new Float32Array([v]).buffer));
+  const i32 = (v: number) => u32(v >>> 0);
+  bytes.push(0x53, 0x51, 0x44, 0x43); // "SQDC"
+  u32(1); // version 1 block
+  u32(2); // numTrees: one per class
+  u32(2); // numClass
+  u32(1); // internal nodes of tree 0
+  u32(1); // internal nodes of tree 1
+  u32(2); // leaves of tree 0
+  u32(2); // leaves of tree 1
+  bytes.push(column & 255, column >>> 8, column & 255, column >>> 8); // feature uint16[2]
+  f32(0.5);
+  f32(0.5);
+  i32(-1); // tree 0: left (column not set) -> leaf 0; leaf ids are global across the block
+  i32(-3); // tree 1: left -> leaf 2
+  i32(-2); // tree 0: right (column set) -> leaf 1
+  i32(-4); // tree 1: right -> leaf 3
+  f32(5); // class 0: wins when the column is not set
+  f32(-5);
+  f32(-5); // class 1: wins when it is set
+  f32(5);
+  return {
+    classes,
+    featureColumns: null,
+    confidenceThreshold: 1.01,
+    classThresholds: thresholds,
+    numClass: 2,
+    numTrees: 2,
+    ...(streams ? { tokenStreams: streams } : {}),
+    trees: btoa(String.fromCharCode(...bytes)),
+  };
+}
+
+describe("heads declare the node token streams they read (v2.3.0)", () => {
+  // A head that splits on the bucket of `t:subscribe` (an own-text word): only the text stream can set that column. Both scoring paths
+  // (row at a time, batched) must give a head exactly the streams it declares: the union when it declares `text`, the class/id stream
+  // alone when it declares nothing, which is what the region head and every pre-2.3 head read.
+  const COLUMN = NODE_FEATURE_NAMES.length + tokenBucket("t:subscribe");
+  const modelWith = (
+    section: Record<string, unknown>,
+    region: Record<string, unknown> = oneSplitHead(null),
+  ) =>
+    loadModel({
+      format: "squirrel-dom-classifier",
+      artifactVersion: 1,
+      featurizerVersion: FEATURIZER_VERSION,
+      nodeFeatureCount: NODE_FEATURE_NAMES.length,
+      pageFeatureCount: PAGE_FEATURE_NAMES.length,
+      tokenBuckets: TOKEN_BUCKETS,
+      region,
+      pageType: oneSplitHead(null),
+      section,
+    });
+  const html = `<!doctype html><html><head><title>T</title></head><body>
+    <div class="box">Subscribe to our newsletter today</div><div class="other">Something else entirely, long enough</div>
+  </body></html>`;
+  const run = (model: ReturnType<typeof loadModel>, batch: number) =>
+    classifyPage(html, URL, { model, scoringBatch: batch, budgetMs: 1e9 });
+
+  for (const batch of [1, 32]) {
+    test(`scoringBatch ${batch}: a section head declaring the text stream is scored on the union`, () => {
+      const out = run(
+        modelWith(columnHead(COLUMN, ["none", "newsletter_signup"], ["classid", "text"])),
+        batch,
+      );
+      expect(out.degraded).toBe("");
+      const fired = out.nodes.filter((n) => n.section?.source === "model");
+      expect(fired.length).toBe(1);
+      expect(fired[0]!.section!.label).toBe("newsletter_signup");
+      expect(fired[0]!.nodeRef.tag).toBe("div");
+    });
+
+    test(`scoringBatch ${batch}: a head that declares nothing never sees the text stream`, () => {
+      const out = run(modelWith(columnHead(COLUMN, ["none", "newsletter_signup"])), batch);
+      expect(out.nodes.filter((n) => n.section?.source === "model").length).toBe(0);
+    });
+
+    test(`scoringBatch ${batch}: the region head follows its own declaration too`, () => {
+      const region = (streams?: string[]) =>
+        columnHead(COLUMN, ["footer", "main_content"], streams, [0.5, 0.5]);
+      const plain = run(modelWith(oneSplitHead(null), region()), batch);
+      const text = run(modelWith(oneSplitHead(null), region(["classid", "text"])), batch);
+      const box = (out: typeof plain) => out.nodes.find((n) => n.nodeRef.tag === "div")!;
+      expect(box(plain).label).toBe("footer"); // the column is never set on the class/id stream
+      expect(box(text).label).toBe("main_content");
+    });
+  }
+
+  test("tokenStreams is validated: unknown streams and a text-only head are refused", () => {
+    const bad = (streams: unknown) => () =>
+      modelWith(columnHead(COLUMN, ["a", "b"], streams as string[]));
+    expect(bad(["nope"])).toThrow(ArtifactError);
+    expect(bad(["text"])).toThrow(ArtifactError);
+    expect(bad([])).toThrow(ArtifactError);
+    expect(() => modelWith(columnHead(COLUMN, ["a", "b"], ["classid"]))).not.toThrow();
+  });
+
+  test("a head with no declaration reads the class/id stream only", () => {
+    expect(modelWith(oneSplitHead(null)).section!.readsText).toBe(false);
+    expect(modelWith(columnHead(COLUMN, ["a", "b"], ["classid", "text"])).section!.readsText).toBe(
+      true,
+    );
+  });
+
+  test("a page-type head cannot declare the text stream", () => {
+    expect(() =>
+      loadModel({
+        format: "squirrel-dom-classifier",
+        artifactVersion: 1,
+        featurizerVersion: FEATURIZER_VERSION,
+        nodeFeatureCount: NODE_FEATURE_NAMES.length,
+        pageFeatureCount: PAGE_FEATURE_NAMES.length,
+        tokenBuckets: TOKEN_BUCKETS,
+        region: oneSplitHead(null),
+        pageType: { ...oneSplitHead(null), tokenStreams: ["classid", "text"] },
+      }),
+    ).toThrow(ArtifactError);
+  });
+
+  test("an artifact built for another featurizer version degrades to the rules path, whichever side is older", () => {
+    for (const version of ["v2.2.0", "v2.4.0"]) {
+      const stale = {
+        format: "squirrel-dom-classifier",
+        artifactVersion: 1,
+        featurizerVersion: version,
+        nodeFeatureCount: NODE_FEATURE_NAMES.length,
+        pageFeatureCount: PAGE_FEATURE_NAMES.length,
+        tokenBuckets: TOKEN_BUCKETS,
+        region: oneSplitHead(null),
+        pageType: oneSplitHead(null),
+        section: columnHead(COLUMN, ["none", "newsletter_signup"], ["classid", "text"]),
+      };
+      const out = classifyPage(html, URL, { model: tryLoadModel(stale).model, budgetMs: 1e9 });
+      expect(out.degraded).toContain(version);
+      expect(out.nodes.every((n) => n.source === "rules")).toBe(true);
+      expect(out.nodes.some((n) => n.section?.source === "model")).toBe(false);
+    }
   });
 });
 

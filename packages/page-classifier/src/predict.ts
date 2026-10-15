@@ -19,6 +19,7 @@ import { parseHTML } from "@squirrelscan/parser/dom";
 import {
   featurizeDocument,
   FEATURIZER_VERSION,
+  mergeTokens,
   TOKEN_BUCKETS,
   type NodeFeatures,
   type WalkAttributes,
@@ -298,7 +299,15 @@ export function classifyDocument(
       for (let i = start; i < end; i++) {
         const ask = !budgetSpent && !declaresOwnRegion(all[i]!);
         asked[i - start] = ask ? 1 : 0;
-        if (ask) writeRow(matrix, rows++ * width, all[i]!, usable.nodeFeatureCount);
+        if (ask) {
+          writeRow(
+            matrix,
+            rows++ * width,
+            all[i]!,
+            usable.nodeFeatureCount,
+            usable.region.readsText,
+          );
+        }
       }
       if (rows > 0) scoreRows(usable.region, matrix, width, rows, chunkScores);
       let row = 0;
@@ -364,14 +373,17 @@ export function classifyDocument(
         nodes.push({ nodeRef, ...withRules(node, byId) });
         continue;
       }
+      const regionTokens = usable.region.readsText
+        ? mergeTokens(node.tokens, node.textTokens)
+        : node.tokens;
       values = toVector(
         node.features,
-        node.tokens,
+        regionTokens,
         usable.nodeFeatureCount,
         values,
         previousTokens,
       );
-      previousTokens = node.tokens;
+      previousTokens = regionTokens;
       scoreRow(usable.region, values, scores);
       const { index, probability } = softmax(scores);
       // Per class, not global. One threshold cannot serve ten classes whose
@@ -423,7 +435,13 @@ export function classifyDocument(
         }
         const end = Math.min(start + batch, all.length);
         for (let i = start; i < end; i++) {
-          writeRow(matrix, (i - start) * width, all[i]!, usable!.nodeFeatureCount);
+          writeRow(
+            matrix,
+            (i - start) * width,
+            all[i]!,
+            usable!.nodeFeatureCount,
+            section.readsText,
+          );
         }
         scoreRows(section, matrix, width, end - start, chunkScores);
         for (let i = start; i < end; i++) {
@@ -444,14 +462,18 @@ export function classifyDocument(
           break;
         }
         const node = featurized.nodes[i]!;
+        // A head reads the streams it declares (`tokenStreams`): the class/id stream always, the v2.3.0 text/attribute stream when declared.
+        const nodeTokens = section.readsText
+          ? mergeTokens(node.tokens, node.textTokens)
+          : node.tokens;
         sectionValues = toVector(
           node.features,
-          node.tokens,
+          nodeTokens,
           usable!.nodeFeatureCount,
           sectionValues,
           sectionTokens,
         );
-        sectionTokens = node.tokens;
+        sectionTokens = nodeTokens;
         scoreRow(section, sectionValues, sectionScores);
         const { index, probability } = softmax(sectionScores);
         const label = section.classes[index]!;
@@ -509,16 +531,18 @@ function withRules(
   return { label, confidence: label === "unknown" ? 0 : 1, source: "rules" };
 }
 
-/** `toVector`'s row, written into a batch matrix at `offset`. */
+/** `toVector`'s row, written into a batch matrix at `offset`. `withText` adds the text/attribute stream (v2.3.0) for a head that declares it. */
 function writeRow(
   matrix: Float32Array,
   offset: number,
   node: NodeFeatures,
   numericCount: number,
+  withText = false,
 ): void {
   matrix.fill(0, offset + numericCount, offset + numericCount + TOKEN_BUCKETS);
   for (let i = 0; i < numericCount; i++) matrix[offset + i] = node.features[i] ?? 0;
   for (const bucket of node.tokens) matrix[offset + numericCount + bucket] = 1;
+  if (withText) for (const bucket of node.textTokens) matrix[offset + numericCount + bucket] = 1;
 }
 
 /**

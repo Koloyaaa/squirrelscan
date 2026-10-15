@@ -37,6 +37,10 @@ const DEFAULT_LEFT = 4;
 const ZERO_THRESHOLD = 1e-35;
 const MAGIC = 0x43_44_51_53; // "SQDC" little-endian
 
+/** Node token streams (featurizer v2.3.0): `classid` = `tokens` (s:, p:), `text` = `textTokens` (t:, st:, a:, r:, h:). */
+export type TokenStream = "classid" | "text";
+const TOKEN_STREAMS: ReadonlySet<string> = new Set(["classid", "text"]);
+
 export interface HeadJson {
   classes: string[];
   featureColumns: number[] | null;
@@ -45,6 +49,9 @@ export interface HeadJson {
   classThresholds: number[] | null;
   numClass: number;
   numTrees: number;
+  /** Which node token streams the head was trained on; absent = ["classid"], the only stream before v2.3.0. A head that reads
+   *  `text` gets the union of both. Declared so a head never silently receives the wrong token input. */
+  tokenStreams?: TokenStream[];
   /** Names of a block appended after [numeric, tokens] (page type's cross-page
    *  features). Absent for heads that read only the featurizer vector. */
   extraFeatureNames?: string[];
@@ -88,6 +95,10 @@ export interface Head {
   leaf: Float32Array;
   /** Per-node missing-value flags (tree-block version 2), or null. */
   flags: Uint8Array | null;
+  /** The node token streams this head reads (see `HeadJson.tokenStreams`). */
+  tokenStreams: readonly TokenStream[];
+  /** True when the head reads the text/attribute stream as well as the class/id stream. */
+  readsText: boolean;
   /** Width of the block appended after [numeric, tokens]; 0 for most heads. */
   extraFeatureCount: number;
   extraFeatureNames: string[];
@@ -169,6 +180,16 @@ export function decodeHead(json: HeadJson): Head {
   }
   if (offset > buffer.byteLength) throw new ArtifactError("tree block is truncated");
 
+  const tokenStreams: TokenStream[] = json.tokenStreams ?? ["classid"];
+  if (
+    !Array.isArray(tokenStreams) ||
+    tokenStreams.length === 0 ||
+    !tokenStreams.includes("classid") ||
+    tokenStreams.some((stream) => !TOKEN_STREAMS.has(stream))
+  ) {
+    throw new ArtifactError(`unsupported tokenStreams ${JSON.stringify(json.tokenStreams)}`);
+  }
+
   const perClass = new Float64Array(numClass).fill(json.confidenceThreshold);
   if (json.classThresholds) {
     if (json.classThresholds.length !== numClass) {
@@ -205,6 +226,8 @@ export function decodeHead(json: HeadJson): Head {
     right,
     leaf,
     flags,
+    tokenStreams,
+    readsText: tokenStreams.includes("text"),
     extraFeatureCount: json.extraFeatureNames?.length ?? 0,
     extraFeatureNames: json.extraFeatureNames ?? [],
     platformThresholds,
@@ -226,13 +249,18 @@ export function loadModel(json: unknown): Model {
   if (artifact.artifactVersion !== ARTIFACT_VERSION) {
     throw new ArtifactError(`unsupported artifact version ${artifact.artifactVersion}`);
   }
+  const pageType = decodeHead(artifact.pageType);
+  if (pageType.readsText) {
+    // Page tokens have no text stream; a page-type head declaring one would be reading nothing it was trained on.
+    throw new ArtifactError("a page-type head cannot read the text token stream");
+  }
   return {
     featurizerVersion: artifact.featurizerVersion,
     nodeFeatureCount: artifact.nodeFeatureCount,
     pageFeatureCount: artifact.pageFeatureCount,
     tokenBuckets: artifact.tokenBuckets,
     region: decodeHead(artifact.region),
-    pageType: decodeHead(artifact.pageType),
+    pageType,
     section: artifact.section ? decodeHead(artifact.section) : null,
   };
 }

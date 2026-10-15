@@ -29,7 +29,14 @@ import { parseHTML } from "@squirrelscan/parser/dom";
 // measuring nothing.
 // ---------------------------------------------------------------------------
 
-export const FEATURIZER_VERSION = "v2.2.0";
+export const FEATURIZER_VERSION = "v2.3.0";
+
+// v2.3.0 adds a text/attribute channel to the NODE tokens only (the dense vector is unchanged): the node's own-text
+// words (t:), the first words of its subtree text (st:), its aria-label words (a:), the rel values of the node and its
+// first 20 descendant anchors (r:) and the social/contact host tag of the anchors in its first 60 subtree elements (h:).
+// It is a SECOND stream (`textTokens`, same 512 buckets), not a change to `tokens`: `tokens` stays exactly the v2.2.0
+// class/id stream, so the region head (and the page-type head, which reads page tokens) keep their trained input. Only
+// the section head reads the union. An artifact built for another version degrades to the rules path.
 
 /** Hashed class/id token buckets. Fixed forever at this version. */
 export const TOKEN_BUCKETS = 512;
@@ -43,6 +50,15 @@ const MAX_TOKENS_PER_ELEMENT = 32;
 
 /** Cap on the text scanned for a pattern flag on one element. */
 const MAX_LOCAL_TEXT = 400;
+
+/** Words taken from a node's own text and from its aria-label (v2.3.0). */
+const MAX_TEXT_WORDS = 12;
+/** Characters of own text scanned for those words. */
+const MAX_WORD_SCAN = 300;
+/** Descendant anchors (the node itself included) whose rel and host become tokens (v2.3.0). */
+const MAX_TOKEN_ANCHORS = 20;
+/** Elements of a node's subtree (preorder, the node first) read for the subtree words (st:) and the anchor hosts (h:). */
+const MAX_SUBTREE_ELEMENTS = 60;
 
 // ---------------------------------------------------------------------------
 // Tag sets
@@ -403,6 +419,52 @@ const SOCIAL_HOSTS = [
   "t.me",
 ];
 
+/** Registrable host -> short tag, for the anchor host tokens (h:, v2.3.0). Two-label keys: `m.facebook.com` and
+ *  `api.whatsapp.com` reduce to their last two labels before the lookup. mailto: and tel: get their own tags. */
+const ANCHOR_HOST_TAGS: ReadonlyMap<string, string> = new Map([
+  ["facebook.com", "facebook"],
+  ["fb.com", "facebook"],
+  ["fb.me", "facebook"],
+  ["twitter.com", "twitter"],
+  ["x.com", "twitter"],
+  ["linkedin.com", "linkedin"],
+  ["lnkd.in", "linkedin"],
+  ["pinterest.com", "pinterest"],
+  ["pin.it", "pinterest"],
+  ["whatsapp.com", "whatsapp"],
+  ["wa.me", "whatsapp"],
+  ["telegram.me", "telegram"],
+  ["telegram.org", "telegram"],
+  ["t.me", "telegram"],
+  ["reddit.com", "reddit"],
+  ["instagram.com", "instagram"],
+  ["youtube.com", "youtube"],
+  ["youtu.be", "youtube"],
+]);
+
+/** The short host tag of an href, "" when it is none of the listed hosts. */
+function anchorHostTag(href: string): string {
+  if (/^mailto:/i.test(href)) return "mailto";
+  if (/^tel:/i.test(href)) return "tel";
+  if (/^whatsapp:/i.test(href)) return "whatsapp";
+  const host = hostOf(href.startsWith("//") ? `https:${href}` : href);
+  if (host === "") return "";
+  return ANCHOR_HOST_TAGS.get(host.split(".").slice(-2).join(".")) ?? "";
+}
+
+const WORD_PATTERN = /\p{L}{2,24}/gu;
+
+/** The first `max` words (letters only, two or more, lowercased) of a string. */
+function textWords(text: string, max: number): string[] {
+  const out: string[] = [];
+  if (!text) return out;
+  for (const match of text.slice(0, MAX_WORD_SCAN).toLowerCase().matchAll(WORD_PATTERN)) {
+    out.push(match[0]);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
 /** URL path segments worth a flag of their own on the page vector. */
 const PATH_SLUGS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ["blog", ["blog", "blogs", "posts"]],
@@ -428,7 +490,9 @@ const PATH_SLUGS: ReadonlyArray<readonly [string, readonly string[]]> = [
 //   bucket = (h >>> 0) % 512
 //
 // Tokens are ASCII after normalisation (digits stripped, lowercased), so code
-// units and UTF-8 bytes agree for every token that survives `tokenize`.
+// units and UTF-8 bytes agree for every token that survives `tokenize`. The v2.3.0
+// text words (t:, a:) are Unicode letters, so for those the hash is over UTF-16 code
+// units only: a port to another runtime must hash the same units, not UTF-8 bytes.
 // ---------------------------------------------------------------------------
 
 export function fnv1a32(value: string): number {
@@ -536,12 +600,34 @@ export interface NodeFeatures {
   depth: number;
   /** Dense numeric vector, ordered by NODE_FEATURE_NAMES. */
   features: number[];
-  /** Sorted, unique hashed token buckets. */
+  /** Sorted, unique hashed token buckets of the class/id stream (prefixes s: and p:), exactly the v2.2.0 stream. The region
+   *  head reads this and only this, so it is bit-identical to what it was trained on. */
   tokens: number[];
+  /** Sorted, unique buckets of the text/attribute stream (t:, st:, a:, r:, h:, since v2.3.0). The section head reads the union
+   *  of `tokens` and `textTokens` (see `mergeTokens`). */
+  textTokens: number[];
   masked: boolean;
   /** Present when `emitMasked` was set and `mask` was not. */
   maskedFeatures?: number[];
   maskedTokens?: number[];
+  maskedTextTokens?: number[];
+}
+
+/** Sorted, unique union of two sorted bucket lists: the section head's token input. */
+export function mergeTokens(a: number[], b: number[]): number[] {
+  if (b.length === 0) return a;
+  const out: number[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length || j < b.length) {
+    const x = i < a.length ? a[i]! : Infinity;
+    const y = j < b.length ? b[j]! : Infinity;
+    const v = Math.min(x, y);
+    out.push(v);
+    if (x === v) i++;
+    if (y === v) j++;
+  }
+  return out;
 }
 
 export interface PageFeatures {
@@ -578,6 +664,13 @@ interface Walk {
   children: number[][];
   /** This element's OWN text runs, joined and whitespace-normalised. */
   ownText: string[];
+  /** Anchors with an href, as element indexes in ascending (document) order, with their lowercased rel and host tag
+   *  (v2.3.0, token channel only). */
+  anchors: number[];
+  anchorRel: string[];
+  anchorHost: string[];
+  /** aria-label values by element index; only elements that carry one (v2.3.0). */
+  ariaLabel: Map<number, string>;
   /** Tag plus the first six child tags: the shape a card grid repeats. */
   shapeKey: string[];
   /** Raw class/id attributes. Tokenised LAZILY, at emit time, for the <= 400
@@ -662,6 +755,10 @@ function allocate(capacity: number): Walk {
     children: [],
     shapeKey: [],
     ownText: [],
+    anchors: [],
+    anchorRel: [],
+    anchorHost: [],
+    ariaLabel: new Map(),
     classAttr: [],
     idAttr: [],
     siblingIndex: new Int32Array(capacity),
@@ -921,7 +1018,13 @@ function countAttributes(
 ): void {
   let aria = 0;
   for (const name of el.getAttributeNames()) {
-    if (name.startsWith("aria-")) aria++;
+    if (name.startsWith("aria-")) {
+      aria++;
+      if (name === "aria-label") {
+        const label = el.getAttribute(name);
+        if (label) walk.ariaLabel.set(index, label);
+      }
+    }
   }
   walk.ariaAttrs[index] = aria;
   if (el.getAttribute("tabindex") !== null) walk.tabindexes[index] = 1;
@@ -943,6 +1046,9 @@ function countTag(walk: Walk, index: number, el: ElementLike, tag: string, host:
       walk.isLink[index] = 1;
       walk.links[index] = 1;
       const trimmed = href.trim();
+      walk.anchors.push(index);
+      walk.anchorRel.push((el.getAttribute("rel") ?? "").toLowerCase());
+      walk.anchorHost.push(anchorHostTag(trimmed));
       if (/^(mailto|tel|sms):/i.test(trimmed)) {
         walk.contactLinks[index] = 1;
         walk.externalLinks[index] = 1;
@@ -1564,19 +1670,66 @@ function setVocabBit(
   if (slot !== undefined) out[base + slot] = 1;
 }
 
-function emitNodeTokens(ctx: EmitContext, i: number, mask: boolean, maskAll = false): number[] {
-  const parent = ctx.walk.parent[i]!;
-  const buckets = new Set<number>();
-  const add = (token: string, prefix: "s:" | "p:"): void => {
-    const seed = prefix === "s:" ? token : `p:${token}`;
+function emitNodeTokens(
+  ctx: EmitContext,
+  i: number,
+  mask: boolean,
+  maskAll = false,
+): { tokens: number[]; textTokens: number[] } {
+  const { walk } = ctx;
+  const parent = walk.parent[i]!;
+  // Two streams in the same 512 buckets: the class/id stream is exactly what v2.2.0 emitted (the region head trained on it), the
+  // text/attribute stream is the v2.3.0 addition (the section head reads the union).
+  const legacy = new Set<number>();
+  const text = new Set<number>();
+  const add = (token: string, prefix: "s:" | "p:" | "t:" | "st:" | "a:" | "r:" | "h:"): void => {
+    const seed = prefix === "s:" ? token : `${prefix}${token}`;
     if (mask && LABEL_WORDS.has(token) && dropsUnderMask(i, seed, maskAll)) return;
-    buckets.add(tokenBucket(`${prefix}${token}`));
+    (prefix === "s:" || prefix === "p:" ? legacy : text).add(tokenBucket(`${prefix}${token}`));
   };
   for (const token of tokensOf(ctx, i)) add(token, "s:");
   if (parent >= 0) {
     for (const token of tokensOf(ctx, parent)) add(token, "p:");
   }
-  return [...buckets].sort((a, b) => a - b);
+  // v2.3.0 text/attribute channel. The label-word mask applies exactly as for class/id tokens: a word such as
+  // "navigation" in an aria-label says the same thing as the class name, so it drops with the same coin per prefix.
+  for (const word of textWords(walk.ownText[i]!, MAX_TEXT_WORDS)) add(word, "t:");
+  for (const word of textWords(walk.ariaLabel.get(i) ?? "", MAX_TEXT_WORDS)) add(word, "a:");
+  // The subtree is the contiguous index range [i, end]; the first MAX_SUBTREE_ELEMENTS of it feed the subtree words and
+  // the anchor hosts, so a container whose text lives in its grandchildren still says what it is.
+  const end = ctx.subtreeEnd[i]!;
+  const windowEnd = Math.min(end, i + MAX_SUBTREE_ELEMENTS - 1);
+  for (let j = i, words = 0; j <= windowEnd && words < MAX_TEXT_WORDS; j++) {
+    const text = walk.ownText[j]!;
+    if (text === "") continue;
+    for (const word of textWords(text, MAX_TEXT_WORDS - words)) {
+      add(word, "st:");
+      words++;
+    }
+  }
+  // The anchors inside this subtree (the node itself counts) in document order: rel values from the first
+  // MAX_TOKEN_ANCHORS, host tags from those inside the element window.
+  let lo = 0;
+  let hi = walk.anchors.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (walk.anchors[mid]! < i) lo = mid + 1;
+    else hi = mid;
+  }
+  for (let k = lo, taken = 0; k < walk.anchors.length && walk.anchors[k]! <= end; k++, taken++) {
+    const inWindow = walk.anchors[k]! <= windowEnd;
+    if (taken >= MAX_TOKEN_ANCHORS && !inWindow) break;
+    if (taken < MAX_TOKEN_ANCHORS) {
+      for (const rel of walk.anchorRel[k]!.split(/\s+/)) {
+        const value = rel.replace(/[^a-z-]/g, "");
+        if (value.length >= 2) add(value, "r:");
+      }
+    }
+    const host = walk.anchorHost[k]!;
+    if (inWindow && host !== "") add(host, "h:");
+  }
+  const sorted = (set: Set<number>): number[] => [...set].sort((a, b) => a - b);
+  return { tokens: sorted(legacy), textTokens: sorted(text) };
 }
 
 // ---------------------------------------------------------------------------
@@ -1892,6 +2045,7 @@ export function featurizeDocument(
   const nodes: NodeFeatures[] = selected.map((i) => {
     let ancestor = walk.parent[i]!;
     while (ancestor >= 0 && !selectedSet.has(ancestor)) ancestor = walk.parent[ancestor]!;
+    const emitted = emitNodeTokens(ctx, i, options.mask === true, options.maskAll === true);
     const node: NodeFeatures = {
       nodeId: i,
       tag: walk.tag[i]!,
@@ -1901,12 +2055,15 @@ export function featurizeDocument(
       parentId: walk.parent[i]!,
       depth: walk.depth[i]!,
       features: emitNodeVector(ctx, i, options.mask === true, options.maskAll === true),
-      tokens: emitNodeTokens(ctx, i, options.mask === true, options.maskAll === true),
+      tokens: emitted.tokens,
+      textTokens: emitted.textTokens,
       masked: options.mask === true,
     };
     if (options.emitMasked && !options.mask) {
       node.maskedFeatures = emitNodeVector(ctx, i, true, options.maskAll === true);
-      node.maskedTokens = emitNodeTokens(ctx, i, true, options.maskAll === true);
+      const maskedEmitted = emitNodeTokens(ctx, i, true, options.maskAll === true);
+      node.maskedTokens = maskedEmitted.tokens;
+      node.maskedTextTokens = maskedEmitted.textTokens;
     }
     return node;
   });
@@ -1952,7 +2109,7 @@ export function featureSchema(): Record<string, unknown> {
       algorithm: "fnv1a-32",
       offsetBasis: 2166136261,
       prime: 16777619,
-      note: "bucket = fnv1a32(prefixedToken) % 512; prefixes s: self, p: parent, b: body",
+      note: "bucket = fnv1a32(prefixedToken) % 512; prefixes s: self, p: parent, b: body; v2.3.0 adds a second node stream (textTokens): t: own-text word, st: subtree word, a: aria-label word, r: anchor rel, h: anchor host tag",
     },
     curatedVocab: CURATED_VOCAB,
     tagVocab: TAG_VOCAB,
