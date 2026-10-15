@@ -104,6 +104,44 @@ describe("ParsedPage producer parity — contactLinks", () => {
   });
 });
 
+// #2307 — `links/tel-mailto` reads `ContactLinkData.section`, and a producer that left it off
+// would drop the "linked in the footer" sentence on that audit path alone.
+const SECTIONED_CONTACT_HTML = `<!DOCTYPE html><html><head><title>t</title></head><body>
+<footer><a href="tel:+15551234567">call</a></footer>
+<main><a href="mailto:hi@example.com">Email us</a></main>
+</body></html>`;
+
+describe("ParsedPage producer parity — contactLinks sections (#2307)", () => {
+  test("all three producers carry the section of each contact anchor", () => {
+    const record = {
+      ...pageRecord(),
+      html: SECTIONED_CONTACT_HTML,
+    } as PageRecord;
+    const produced = [
+      parsePage(SECTIONED_CONTACT_HTML, URL),
+      parseHtmlForRules(SECTIONED_CONTACT_HTML, URL),
+      parsePageRecord(record)!,
+    ];
+
+    for (const parsed of produced) {
+      expect(parsed.contactLinks).toEqual([
+        {
+          scheme: "tel",
+          value: "+15551234567",
+          text: "call",
+          section: "footer",
+        },
+        {
+          scheme: "mailto",
+          value: "hi@example.com",
+          text: "Email us",
+          section: "content",
+        },
+      ]);
+    }
+  });
+});
+
 // #109 — `links/no-contextual-inbound` reads `LinkData.isChrome`, and which
 // producer ran depends on whether the crawl stored `parsedData`. A flag set in
 // only some of them would make the rule silently pass on half the audit paths.

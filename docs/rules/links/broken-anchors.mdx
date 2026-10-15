@@ -37,6 +37,8 @@ A same-page link needs only the page it sits on. A link into another page is che
 
 Pages that are built in the browser can add their ids after load. squirrel reports those as unconfirmed rather than broken, unless the page was rendered during the audit.
 
+When the page's links carry a link section (see [Page Classifier](/configuration/classifier)), each item says where the links to it sit and carries the counts in `meta.sections`, for example `https://example.com/guide#gone, linked in the page content and the footer`. Same-page `#fragment` links have no section, so their items stay as they were, and so does a crawl whose links carry none.
+
 ## How to fix it
 
 Update the link to the id that exists now, or add the id to the target element. Prefer fixing the link: an id added only to satisfy a link often breaks again in the next redesign.

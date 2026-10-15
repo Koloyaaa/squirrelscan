@@ -1607,6 +1607,12 @@ export interface ContactLinkData {
    * {@link LinkData}: they are not pages.
    */
   obfuscated?: "cloudflare";
+  /** Part of the page the anchor sat in (#2307); absent on a parse stored before it. */
+  section?: LinkSection;
+  /** Who answered `section` when the page classifier did; see {@link LinkData.sectionSource}. */
+  sectionSource?: ClassifierSource;
+  /** The classifier's confidence in `section`; present only with a `model` source. */
+  sectionConfidence?: number;
 }
 
 export interface ImageData {

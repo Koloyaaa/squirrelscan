@@ -48,6 +48,36 @@ export function sectionPhrase(counts: SectionCounts): string {
   return list ? `in ${list}` : "";
 }
 
+/** "label, linked in the footer": the label with where its links sit; the label alone when no section is known. */
+export function withSection(label: string, counts: SectionCounts | undefined): string {
+  const phrase = counts ? sectionPhrase(counts) : "";
+  return phrase ? `${label}, linked ${phrase}` : label;
+}
+
+/** `{ sections }` for an item's `meta`, or nothing when no section is known. */
+export function sectionMeta(counts: SectionCounts | undefined): { sections?: SectionCounts } {
+  return counts && Object.keys(counts).length > 0 ? { sections: counts } : {};
+}
+
+/** Add one link's section to the counts kept for `key`; unknown and missing add nothing. */
+export function addSection(
+  byKey: Map<string, SectionCounts>,
+  key: string,
+  section: LinkSection | undefined
+): void {
+  if (!section || section === "unknown") return;
+  let counts = byKey.get(key);
+  if (!counts) byKey.set(key, (counts = {}));
+  countSection(counts, section);
+}
+
+/** Fold `from` into `into`. */
+export function mergeSections(into: SectionCounts, from: SectionCounts): void {
+  for (const key of Object.keys(from) as (keyof SectionCounts)[]) {
+    into[key] = (into[key] ?? 0) + (from[key] ?? 0);
+  }
+}
+
 /** "the footer, the navigation and the breadcrumbs": up to three names, then "and N more". */
 function nameList(names: string[]): string {
   if (names.length <= 1) return names.join("");

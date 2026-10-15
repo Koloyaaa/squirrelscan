@@ -19,6 +19,8 @@ The rule runs on every crawled page. It emits a single check named `https-downgr
 
 The test is on the raw attribute text, so protocol-relative hrefs such as `//example.org/page` are not flagged, and neither is a relative link. The check does not distinguish internal from external destinations.
 
+When the page's links carry a link section (see [Page Classifier](/configuration/classifier)), each item says where its link sits and carries the counts in `meta.sections`, for example `http://other.example/x, linked in the footer`. A link the page markup and the classifier could not place, and a crawl whose links carry no section, keep the plain item.
+
 ## How to fix it
 
 ```html

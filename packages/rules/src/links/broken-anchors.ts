@@ -8,11 +8,14 @@
 // records. Findings are one per target URL and fragment, listing every page that
 // links to it.
 
+import type { LinkSection } from "@squirrelscan/core-contracts";
+
 import type { CheckResult, Rule, RuleContext, RuleResult } from "../types";
 import type { PageAnchorSignal } from "./page-anchors";
 
 import { normalizeUrl } from "@squirrelscan/utils";
 
+import { countSection, sectionMeta, withSection, type SectionCounts } from "./link-section-label";
 import { buildPageAnchorSignal, decodeFragment, isJudgeableFragment } from "./page-anchors";
 
 interface AnchorGroup {
@@ -24,6 +27,8 @@ interface AnchorGroup {
   skipLink: boolean;
   /** The target is an unrendered client-side shell: the id may come from JavaScript. */
   unconfirmed: boolean;
+  /** Where the links to it sit (#2307). Same-page `#x` links have no section and add nothing. */
+  sections: SectionCounts;
 }
 
 type SitePage = NonNullable<RuleContext["site"]>["pages"][number];
@@ -140,6 +145,7 @@ export const brokenAnchorsRule: Rule = {
       sourceUrl: string;
       targetRecord: PageAnchorSignal | null;
       sourceRecord: PageAnchorSignal | null;
+      section?: LinkSection;
     }): void => {
       if (!isJudgeableFragment(link.fragment)) return;
       // No record: nothing to judge against (no document, failed parse, error page).
@@ -158,9 +164,11 @@ export const brokenAnchorsRule: Rule = {
           sources: new Set(),
           skipLink: false,
           unconfirmed: link.targetRecord.clientShell,
+          sections: {},
         };
         groups.set(groupKey, group);
       }
+      countSection(group.sections, link.section);
       group.sources.add(link.sourceUrl);
       if (link.sourceRecord?.skipFragments.includes(link.fragment)) group.skipLink = true;
     };
@@ -203,6 +211,7 @@ export const brokenAnchorsRule: Rule = {
             sourceUrl: page.url,
             targetRecord: ownRecord,
             sourceRecord: ownRecord,
+            section: link.section,
           });
           continue;
         }
@@ -218,6 +227,7 @@ export const brokenAnchorsRule: Rule = {
           sourceUrl: page.url,
           targetRecord: anchorsOf(targetKey),
           sourceRecord: ownRecord,
+          section: link.section,
         });
       }
     }
@@ -233,9 +243,9 @@ export const brokenAnchorsRule: Rule = {
         message: `${broken.length} in-page anchor link(s) point at an id that does not exist on the target page`,
         items: broken.map((g) => ({
           id: g.url,
-          label: `${g.url}${g.skipLink ? " (skip link)" : ""}`,
+          label: withSection(`${g.url}${g.skipLink ? " (skip link)" : ""}`, g.sections),
           sourcePages: [...g.sources],
-          meta: { skipLink: g.skipLink, linkedFrom: g.sources.size },
+          meta: { skipLink: g.skipLink, ...sectionMeta(g.sections), linkedFrom: g.sources.size },
         })),
       });
     } else {
@@ -254,9 +264,9 @@ export const brokenAnchorsRule: Rule = {
         message: `${unconfirmed.length} in-page anchor link(s) target a client-rendered page that was not rendered, so the id may be added by JavaScript`,
         items: unconfirmed.map((g) => ({
           id: g.url,
-          label: g.url,
+          label: withSection(g.url, g.sections),
           sourcePages: [...g.sources],
-          meta: { linkedFrom: g.sources.size, rendered: false },
+          meta: { ...sectionMeta(g.sections), linkedFrom: g.sources.size, rendered: false },
         })),
       });
     }

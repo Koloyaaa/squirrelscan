@@ -2,6 +2,15 @@
 
 import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
 import type { CheckItem } from "@squirrelscan/core-contracts";
+import { MAX_CONTACT_LINKS, makeLinkSectionResolver } from "@squirrelscan/parser";
+
+import {
+  addSection,
+  countSection,
+  sectionMeta,
+  withSection,
+  type SectionCounts,
+} from "./link-section-label";
 
 /** Digits-only phone number, for comparison (drops +, spaces, punctuation) */
 function normalizePhone(raw: string): string {
@@ -143,6 +152,40 @@ export const telMailtoRule: Rule = {
 
     const links = doc.querySelectorAll("a[href]");
 
+    // #2307: where each tel:/mailto: anchor sits, from the page's carried contact links, keyed by
+    // scheme, value and display text (how the parse stores them). A parse without sections leaves
+    // this empty and the items bare.
+    const sectionsByContact = new Map<string, SectionCounts>();
+    for (const contact of ctx.parsed.contactLinks ?? []) {
+      addSection(
+        sectionsByContact,
+        `${contact.scheme}\n${contact.value}\n${contact.text}`,
+        contact.section
+      );
+    }
+    // The parse keeps the first MAX_CONTACT_LINKS contact anchors only. Past that, an anchor's
+    // landmark is read from the DOM here (markup only: the classifier's answer is not kept for it).
+    const contactsCapped = (ctx.parsed.contactLinks?.length ?? 0) >= MAX_CONTACT_LINKS;
+    const markupSectionOf = makeLinkSectionResolver();
+    const placed = (
+      item: CheckItem,
+      scheme: "tel" | "mailto",
+      href: string,
+      text: string,
+      anchor: Element
+    ): CheckItem => {
+      const value = href.trim().slice(scheme.length + 1).split(/[?;]/)[0] ?? "";
+      let sections = sectionsByContact.get(`${scheme}\n${value}\n${text}`);
+      if (!sections && contactsCapped) {
+        const own: SectionCounts = {};
+        countSection(own, markupSectionOf(anchor).section);
+        if (Object.keys(own).length > 0) sections = own;
+      }
+      return sections
+        ? { ...item, label: withSection(item.label ?? item.id, sections), meta: sectionMeta(sections) }
+        : item;
+    };
+
     for (const link of links) {
       const href = link.getAttribute("href") || "";
 
@@ -166,17 +209,33 @@ export const telMailtoRule: Rule = {
           normalizePhone(intlForm).length >= MIN_INTL_DISPLAY_DIGITS &&
           phoneNumbersMatch(phone, intlForm)
         ) {
-          telTrunkPrefixes.push({
-            id: href,
-            label: `text "${text}": use "${intlForm}"`,
-            snippet: link.outerHTML.slice(0, 200),
-          });
+          telTrunkPrefixes.push(
+            placed(
+              {
+                id: href,
+                label: `text "${text}": use "${intlForm}"`,
+                snippet: link.outerHTML.slice(0, 200),
+              },
+              "tel",
+              href,
+              text,
+              link
+            )
+          );
         } else if (/\d{3,}/.test(text) && !phoneNumbersMatch(phone, text)) {
-          telMismatches.push({
-            id: href,
-            label: `href "${phone}" ≠ text "${text}"`,
-            snippet: link.outerHTML.slice(0, 200),
-          });
+          telMismatches.push(
+            placed(
+              {
+                id: href,
+                label: `href "${phone}" ≠ text "${text}"`,
+                snippet: link.outerHTML.slice(0, 200),
+              },
+              "tel",
+              href,
+              text,
+              link
+            )
+          );
         }
       }
 
@@ -195,11 +254,19 @@ export const telMailtoRule: Rule = {
         // Check for href/text email mismatch
         const text = link.textContent?.trim() || "";
         if (looksLikeEmail(text) && text.toLowerCase() !== email.toLowerCase()) {
-          mailtoMismatches.push({
-            id: href,
-            label: `href "${email}" ≠ text "${text}"`,
-            snippet: link.outerHTML.slice(0, 200),
-          });
+          mailtoMismatches.push(
+            placed(
+              {
+                id: href,
+                label: `href "${email}" ≠ text "${text}"`,
+                snippet: link.outerHTML.slice(0, 200),
+              },
+              "mailto",
+              href,
+              text,
+              link
+            )
+          );
         }
       }
     }

@@ -490,6 +490,33 @@ describe("SiteQuery — inbound link sections (#2307)", () => {
   });
 });
 
+// /lone has exactly one inbound link, from the navigation of the homepage.
+const WEAK_SECTIONED_FIXTURE: PageRecord[] = [
+  pageRow(BASE, [link("/a"), link("/b"), placed("/lone", "navigation")]),
+  pageRow("https://example.com/a", [link("/b")]),
+  pageRow("https://example.com/b", [link("/a")]),
+  pageRow("https://example.com/lone", []),
+];
+
+describe("SiteQuery dual-path — links/weak-internal-links names the section (#2307)", () => {
+  test("streaming path is deep-equal to legacy and says where the one link sits", async () => {
+    const store = await freshStore();
+    for (const p of WEAK_SECTIONED_FIXTURE) await run(store.upsertPage(CRAWL, p));
+
+    const { legacy, streamed } = await runBothWays(store, weakRule, { excludePatterns: [] });
+
+    expect(streamed).toEqual(legacy);
+    expect(legacy[0]!.items).toEqual([
+      {
+        id: "https://example.com/lone",
+        label: "https://example.com/lone, linked in the navigation",
+        meta: { sections: { navigation: 1 } },
+      },
+    ]);
+    await run(store.close());
+  });
+});
+
 describe("SiteQuery dual-path — edge cases parity", () => {
   test("a crawl with <2 pages skips identically on both paths", async () => {
     const store = await freshStore();

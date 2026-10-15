@@ -9,16 +9,7 @@ import {
 import { isCloudflareEmailProtectionUrl, normalizeUrl } from "@squirrelscan/utils";
 import { isRateLimitStatus } from "@squirrelscan/utils/rate-limit";
 
-import { countSection, sectionPhrase, type SectionCounts } from "./link-section-label";
-
-function withSection(label: string, counts: SectionCounts | undefined): string {
-  const phrase = counts ? sectionPhrase(counts) : "";
-  return phrase ? `${label}, linked ${phrase}` : label;
-}
-
-function sectionMeta(counts: SectionCounts | undefined): { sections?: SectionCounts } {
-  return counts && Object.keys(counts).length > 0 ? { sections: counts } : {};
-}
+import { countSection, sectionMeta, withSection, type SectionCounts } from "./link-section-label";
 
 export const brokenLinksRule: Rule = {
   meta: {

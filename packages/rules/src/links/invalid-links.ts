@@ -2,6 +2,8 @@
 
 import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
 
+import { countSection, sectionMeta, withSection, type SectionCounts } from "./link-section-label";
+
 export const invalidLinksRule: Rule = {
   meta: {
     id: "links/invalid-links",
@@ -31,11 +33,16 @@ export const invalidLinksRule: Rule = {
         name: "invalid-links",
         status: "warn",
         message: `Found ${invalidLinks.length} invalid link(s)`,
-        items: invalidLinks.map((link) => ({
-          id: link.url,
-          label: link.error ?? "Invalid format",
-          meta: { text: link.text, error: link.error },
-        })),
+        items: invalidLinks.map((link) => {
+          // #2307: where the link sits, when its parse recorded a section.
+          const sections: SectionCounts = {};
+          countSection(sections, link.section);
+          return {
+            id: link.url,
+            label: withSection(link.error ?? "Invalid format", sections),
+            meta: { text: link.text, error: link.error, ...sectionMeta(sections) },
+          };
+        }),
       });
     }
 

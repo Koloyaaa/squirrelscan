@@ -4,6 +4,7 @@ import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
 import { formatRedirectHop, type RedirectChain } from "@squirrelscan/core-contracts";
 
 import { didRedirect, targetKey } from "../shared/redirect-evidence";
+import { addSection, sectionMeta, withSection, type SectionCounts } from "./link-section-label";
 
 export const redirectChainsRule: Rule = {
   meta: {
@@ -79,6 +80,8 @@ export const redirectChainsRule: Rule = {
     }
 
     const linksToRedirect = new Map<string, Set<string>>();
+    // #2307: where the links to each redirecting target sit.
+    const sectionsToRedirect = new Map<string, SectionCounts>();
 
     if (redirectTargets.size > 0) {
       for (const page of pages) {
@@ -94,6 +97,7 @@ export const redirectChainsRule: Rule = {
               const sources = linksToRedirect.get(target) ?? new Set();
               sources.add(page.url);
               linksToRedirect.set(target, sources);
+              addSection(sectionsToRedirect, target, link.section);
             }
           } catch {
             continue;
@@ -110,13 +114,15 @@ export const redirectChainsRule: Rule = {
         items: [...linksToRedirect.entries()].map(([target, sources]) => {
           const redirect = redirectTargets.get(target);
           const label = redirect ? redirect.chainLabel : target;
+          const sections = sectionsToRedirect.get(target);
           return {
             id: redirect?.originalUrl ?? target,
-            label,
+            label: withSection(label, sections),
             sourcePages: [...sources],
             meta: {
               targetUrl: redirect?.finalUrl ?? target,
               chain: redirect?.chain,
+              ...sectionMeta(sections),
             },
           };
         }),
