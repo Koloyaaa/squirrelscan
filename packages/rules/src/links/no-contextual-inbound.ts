@@ -35,8 +35,11 @@
 //   * WHERE THE LINKS ARE (#2307). When the inbound links carry a `section`, each item says which
 //     parts of the page they sit in ("linked only from the footer and the navigation") and
 //     carries the counts in `meta.sections`. "Only" is claimed only when every counted inbound
-//     link had a section; otherwise the label says "from". A crawl without sections keeps the
-//     bare `{ id }` items.
+//     link had a section; otherwise the label says "from". `isChrome` stays the decision: a link
+//     whose section is `content` but whose anchor has a footer ancestor (a post's own footer) is
+//     chrome here, and the label counts it apart as a template link inside the page content
+//     instead of naming the content as a place the page is linked from. A crawl without sections
+//     keeps the bare `{ id }` items.
 //   * OLD CRAWLS. `isChrome` is optional on `LinkData` (crawls stored before
 //     #109 omit it). `undefined` counts as contextual on BOTH paths, so an old DB
 //     produces contextual == raw and this rule simply passes — never a site-wide
@@ -57,7 +60,7 @@ import { getPathname, normalizeUrl } from "@squirrelscan/utils";
 
 import { logger } from "../logger";
 import { frontDoorTest } from "../shared/front-door";
-import { countSection, sectionFromPhrase, type SectionCounts } from "./link-section-label";
+import { chromeSectionPhrase, countSection, type SectionCounts } from "./link-section-label";
 
 const SKIP_CHECK: CheckResult = {
   name: "no-contextual-inbound",
@@ -120,7 +123,7 @@ function buildCheck(
         if (!placed) return { id: url };
         return {
           id: url,
-          label: `${url}, linked ${placed.complete ? "only " : ""}${sectionFromPhrase(placed.counts)}`,
+          label: `${url}, ${chromeSectionPhrase(placed.counts, placed.complete)}`,
           meta: { sections: placed.counts },
         };
       }),

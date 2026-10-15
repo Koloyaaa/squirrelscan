@@ -352,7 +352,7 @@ describe("links/no-contextual-inbound — link sections", () => {
     expect(check(noContextualInboundRule, ctx(unknown)).items).toEqual([{ id: LEGAL }]);
   });
 
-  test("more than two sections read as the first two and a count", () => {
+  test("more than three sections read as the first three and a count", () => {
     const pages: PageSpec[] = [
       { url: BASE, links: [body("/a"), footer("/legal")] },
       { url: "https://example.com/a", links: [nav("/legal")] },
@@ -363,8 +363,87 @@ describe("links/no-contextual-inbound — link sections", () => {
     const result = check(noContextualInboundRule, ctx(pages));
 
     expect(result.items?.[0]?.label).toBe(
-      `${LEGAL}, linked only from the footer, the header and 2 more`
+      `${LEGAL}, linked only from the footer, the header, the navigation and 1 more`
     );
+  });
+
+  test("three sections are all named", () => {
+    const pages: PageSpec[] = [
+      { url: BASE, links: [body("/a"), footer("/legal")] },
+      { url: "https://example.com/a", links: [nav("/legal")] },
+      { url: "https://example.com/b", links: [{ ...chrome("/legal"), section: "breadcrumbs" }] },
+      { url: LEGAL, links: [] },
+    ];
+
+    expect(check(noContextualInboundRule, ctx(pages)).items?.[0]?.label).toBe(
+      `${LEGAL}, linked only from the breadcrumbs, the footer and the navigation`
+    );
+  });
+
+  // A post's own <footer> inside <main> holds a "Back to the journal" link: chrome by tag (isChrome),
+  // content by section. The page is still chrome-only, so the label may not say it is linked
+  // "only from the page content"; it counts those as template links.
+  describe("template links inside the page content", () => {
+    /** A link in a block's own footer: chrome by landmark, `content` by section. */
+    function templateLink(url: string): LinkData {
+      return { ...chrome(url), section: "content" };
+    }
+    const BLOG = "https://example.com/blog";
+
+    test("names the chrome sections, then counts the content links apart", () => {
+      const pages: PageSpec[] = [
+        { url: BASE, links: [body("/a"), footer("/blog"), nav("/blog")] },
+        { url: "https://example.com/a", links: [footer("/blog"), nav("/blog"), templateLink("/blog")] },
+        { url: "https://example.com/b", links: [footer("/blog"), templateLink("/blog")] },
+        { url: BLOG, links: [{ ...chrome("/blog"), section: "breadcrumbs" }] },
+      ];
+      const result = check(noContextualInboundRule, ctx(pages));
+
+      expect(result.items).toEqual([
+        {
+          id: BLOG,
+          label: `${BLOG}, linked only from the footer, the navigation and the breadcrumbs, and 2 template links inside the page content`,
+          meta: { sections: { footer: 3, navigation: 2, breadcrumbs: 1, content: 2 } },
+        },
+      ]);
+    });
+
+    test("a single template link reads in the singular", () => {
+      const pages: PageSpec[] = [
+        { url: BASE, links: [body("/a"), footer("/blog")] },
+        { url: "https://example.com/a", links: [footer("/blog"), templateLink("/blog")] },
+        { url: BLOG, links: [] },
+      ];
+
+      expect(check(noContextualInboundRule, ctx(pages)).items?.[0]?.label).toBe(
+        `${BLOG}, linked only from the footer, and 1 template link inside the page content`
+      );
+    });
+
+    test("content links alone never read as a place the page is linked from", () => {
+      const pages: PageSpec[] = [
+        { url: BASE, links: [body("/a"), templateLink("/blog")] },
+        { url: "https://example.com/a", links: [templateLink("/blog")] },
+        { url: BLOG, links: [] },
+      ];
+      const label = check(noContextualInboundRule, ctx(pages)).items?.[0]?.label;
+
+      expect(label).toBe(`${BLOG}, linked only by 2 template links inside the page content`);
+      expect(label).not.toMatch(/from [^,]*the page content/);
+    });
+
+    test("with some inbound links unplaced the label drops 'only' but keeps the split", () => {
+      const pages: PageSpec[] = [
+        { url: BASE, links: [body("/a"), footer("/blog")] },
+        { url: "https://example.com/a", links: [chrome("/blog"), templateLink("/blog")] },
+        { url: "https://example.com/b", links: [footer("/blog")] },
+        { url: BLOG, links: [] },
+      ];
+
+      expect(check(noContextualInboundRule, ctx(pages)).items?.[0]?.label).toBe(
+        `${BLOG}, linked from the footer, and 1 template link inside the page content`
+      );
+    });
   });
 
   test("the streaming path reads siteQuery.inboundSectionCounts and gets the same item", () => {
