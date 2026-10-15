@@ -205,7 +205,8 @@ export interface RunAuditOptions extends AuditOptions {
     balance: PreflightBalance
   ) => Promise<boolean>;
   /** User accepted the cost-disclosing consent prompt under a cap → skip the
-   * post-crawl prefetch confirm. Uncapped spend (dead-links) is still gated. */
+   * post-crawl prefetch confirm, and the link-check confirm (#801: its charge
+   * is in the capped estimate). Tech/editor keep their own gates. */
   cloudConsented?: boolean;
   /**
    * Concrete fetch mode for this run, already resolved by the caller from
@@ -1429,7 +1430,7 @@ export async function runAudit(
       // Cloud bulk dead-link checks (shared global cache) when authed and
       // the links/dead-links rule is enabled; null → plain local checking.
       // Gated behind the SAME spend confirmation as STEP 2.4 prefetch so the
-      // dead_links charge (which happens here, before that confirm) can't be
+      // link-check charge (which happens here, before that confirm) can't be
       // a surprise: when the estimate exceeds [cloud].confirm_threshold and a
       // TTY confirm callback exists, the user is prompted first; a decline
       // falls back to local per-link checks.
@@ -1531,6 +1532,10 @@ export async function runAudit(
                       client: deadLinksClient,
                       config: mergedConfig,
                       auditId: crawlId,
+                      // #801: the cloud bills the checks to the registered run;
+                      // no run, no cloud checks (local, free).
+                      getRunId: options.getRunId,
+                      maxPages: mergedConfig.crawler.max_pages,
                       externalLinkCount: externalLinkUrls.size,
                       getBalance: deadLinksClient
                         ? async () =>
@@ -1538,7 +1543,12 @@ export async function runAudit(
                               (await deadLinksClient.getBalance()).balance
                             )
                         : undefined,
-                      confirm: options.confirmCloudSpend,
+                      // #801: the link charge is in the consented, capped
+                      // estimate now (one per page of the limit), so a
+                      // consented run is not stopped mid-audit to confirm it.
+                      confirm: options.cloudConsented
+                        ? undefined
+                        : options.confirmCloudSpend,
                       onSpend: (units, credits) => {
                         deadLinksUnits += units;
                         deadLinksCredits += credits;
@@ -2098,14 +2108,17 @@ export async function runAudit(
       const spendLines = [
         // render misses + render_cached hits, at the actual server debit #279.
         ...foldRenderSpendLines(renderCharges),
-        ...(deadLinksUnits > 0
+        // A batch can be charged with no answers (a settle that could not
+        // run keeps its reservation), so credits alone keep the line (#801).
+        ...(deadLinksUnits > 0 || deadLinksCredits > 0
           ? [
               {
-                service: "dead-links",
-                feature: "dead_links",
+                // Pricing v12 (#801): the cloud's link checks bill the run
+                // `external_link`, 1 per distinct link it answered.
+                service: "external links",
+                feature: "external_link",
                 units: deadLinksUnits,
-                // Accumulated per call — the server rounds ceil(urls/100)
-                // per call, so recomputing from total units would undercount.
+                // Accumulated per call: the server's own `charged` figure.
                 credits: deadLinksCredits,
               },
             ]
