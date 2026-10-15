@@ -1,7 +1,7 @@
 {
   "file": "classifier-v2.json",
-  "sha256": "9b9859aeac4a8199869ba8c3a8e227acb8919cb87e393b5022f310892b1ee069",
-  "bytes": 8818428,
+  "sha256": "f0de5687de8b2e735d5ab3a2782c2d8049b820ccec477794c22a4a795fd106ec",
+  "bytes": 8818429,
   "format": "squirrel-dom-classifier",
   "artifactVersion": 1,
   "featurizerVersion": "v2.3.0",

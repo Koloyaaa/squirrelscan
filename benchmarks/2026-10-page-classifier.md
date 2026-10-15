@@ -8,7 +8,7 @@ says nothing. The model ships inside the executable.
 Machine: 16 GB Apple M2, macOS 15, other work running (load average 3 to 5,
 swap nearly full), so absolute milliseconds are inflated. Compare the paired
 rows. Bun 1.3.14. Artifact: the v2.3.0 featurizer's, 8.8 MB, with the region,
-page type and section heads.
+page type and section heads (pagination bar .80, social_share .85).
 Method: [`apps/cli/scripts/bench-classifier.ts`](../apps/cli/scripts/bench-classifier.ts).
 Each page is parsed three times per variant, alternating, and the minimum is
 kept. The model is loaded before timing starts and reported on its own.
@@ -54,7 +54,7 @@ commands that never audit do not parse it.
 On sites with good markup, little. Of 14,477 links on 60 pages of squirrelscan's
 own sites, 78 sat outside every landmark, and for those the model said "site
 furniture" (which a finding cannot quote) or nothing. Its one section answer on
-those pages was pagination, for 41 links inside navigation or content markup.
+those pages was pagination, for 34 links inside navigation or content markup.
 The model is for pages without landmarks.
 
 To see that, `--stripped` rewrites `nav`, `header`, `footer`, `aside`, `main`
@@ -62,14 +62,14 @@ and `article` to `div` and drops the roles, then asks the model alone where each
 link sits, against what the original markup said (117 pages, 26,866 links).
 It answers 10.7% of them, by design: every class has a threshold chosen for
 precision. What it answers agrees with the markup, and it names a section the
-markup could not: 70 pagination links that the markup called navigation.
+markup could not: 64 pagination links that the markup called navigation.
 
 | original markup | model, footer | model, content | model, pagination | model, navigation | model, no answer |
 |---|---|---|---|---|---|
 | footer | 1,087 | 0 | 0 | 0 | 998 |
 | content | 9 | 1,182 | 0 | 0 | 797 |
 | header | 0 | 0 | 0 | 462 | 628 |
-| navigation | 37 | 1 | 70 | 0 | 10,712 |
+| navigation | 37 | 1 | 64 | 0 | 10,718 |
 | sidebar | 0 | 0 | 0 | 31 | 10,698 |
 
 Re-run the three modes (`--dir`, no flag, `--stripped`) whenever the artifact is
