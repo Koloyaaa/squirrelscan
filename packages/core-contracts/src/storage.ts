@@ -4,7 +4,7 @@
 import type { Effect } from "effect";
 
 import type { AuditFailureDetail } from "./failure-reason";
-import type { ClassifiedPageType, LinkSection } from "./index";
+import type { ClassifiedPageType, LinkSection, LinkSectionCounts } from "./index";
 import type { RefusedFetch } from "./refused-fetch";
 
 // ============================================
@@ -969,6 +969,13 @@ export interface SiteQuery {
    * the case `links/orphan-pages` and `links/weak-internal-links` cannot see.
    */
   contextualIncomingLinkCounts(): Map<string, number>;
+  /**
+   * Where the counted inbound links to each page sit, by link section (#2307). Same keys and the
+   * same links as {@link incomingLinkCounts}; links with no section (a crawl stored before link
+   * sections existed) are not counted, so a page can have fewer here than there. Optional: an
+   * implementation without section data omits it, and the rules then say nothing about placement.
+   */
+  inboundSectionCounts?(): Map<string, LinkSectionCounts>;
   /** Normalized URLs of pages classified as `type`. */
   pagesByType(type: string): string[];
   /** URL sets sharing one template fingerprint (count > 1). */

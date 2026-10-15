@@ -1531,6 +1531,9 @@ export type LinkSection =
   | "author_byline"
   | "newsletter_signup";
 
+/** Links per section, unknown left out. Keys appear only when the count is above zero. */
+export type LinkSectionCounts = Partial<Record<Exclude<LinkSection, "unknown">, number>>;
+
 /** Where an answer came from: the page's markup (`rules`) or the page classifier's model. */
 export type ClassifierSource = "rules" | "model";
 

@@ -257,3 +257,133 @@ describe("the page the crawl started on is never flagged (pub#796)", () => {
     expect(ids(check(orphanPagesRule, withEntry(ctx(unlinked))))).not.toContain(EN);
   });
 });
+
+// #2307: where the inbound links sit. A crawl whose links carry a `section` says so; one whose
+// links do not keeps the bare items it always had.
+describe("links/no-contextual-inbound — link sections", () => {
+  /** A footer link: sitewide chrome, in the footer. */
+  function footer(url: string): LinkData {
+    return { ...chrome(url), section: "footer" };
+  }
+  /** A navigation link: sitewide chrome, in the navigation. */
+  function nav(url: string): LinkData {
+    return { ...chrome(url), section: "navigation" };
+  }
+
+  // /legal is linked from the footer on three pages and the navigation on one.
+  const SECTIONED: PageSpec[] = [
+    { url: BASE, links: [body("/a"), body("/b"), footer("/legal")] },
+    { url: "https://example.com/a", links: [body("/b"), nav("/legal")] },
+    { url: "https://example.com/b", links: [body("/a"), footer("/legal")] },
+    { url: "https://example.com/legal", links: [footer("/legal")] },
+  ];
+  const LEGAL = "https://example.com/legal";
+
+  /** The streaming path's inputs for SECTIONED, by hand: what `createSiteQuery` would hold. */
+  function streaming(
+    pages: PageSpec[],
+    inboundSectionCounts?: () => Map<string, Record<string, number>>
+  ): RuleContext {
+    const c = ctx(pages);
+    const urls = pages.map((p) => p.url);
+    const all = new Map(urls.map((u) => [u, 0]));
+    const contextual = new Map(urls.map((u) => [u, 0]));
+    for (const page of pages) {
+      for (const link of page.links) {
+        const target = new URL(link.url, page.url).href;
+        const key = urls.find((u) => u === target || u === `${target}/`);
+        if (key === undefined) continue;
+        all.set(key, (all.get(key) ?? 0) + 1);
+        if (!link.isChrome) contextual.set(key, (contextual.get(key) ?? 0) + 1);
+      }
+    }
+    c.siteQuery = {
+      incomingLinkCounts: () => all,
+      contextualIncomingLinkCounts: () => contextual,
+      ...(inboundSectionCounts ? { inboundSectionCounts } : {}),
+    } as unknown as RuleContext["siteQuery"];
+    return c;
+  }
+
+  test("names the sections the inbound links sit in, and carries the counts", () => {
+    const result = check(noContextualInboundRule, ctx(SECTIONED));
+
+    expect(result.status).toBe("warn");
+    expect(result.items).toEqual([
+      {
+        id: LEGAL,
+        label: `${LEGAL}, linked only from the footer and the navigation`,
+        meta: { sections: { footer: 3, navigation: 1 } },
+      },
+    ]);
+    // The message and the sampled value are as they were.
+    expect(result.message).toBe("1 page(s) are linked only from sitewide chrome");
+    expect(result.value).toBe("/legal");
+  });
+
+  test("says 'from', not 'only from', when some inbound links carry no section", () => {
+    const pages: PageSpec[] = [
+      { url: BASE, links: [body("/a"), footer("/legal")] },
+      { url: "https://example.com/a", links: [body(BASE), chrome("/legal")] },
+      { url: "https://example.com/b", links: [footer("/legal")] },
+      { url: LEGAL, links: [] },
+    ];
+    const result = check(noContextualInboundRule, ctx(pages));
+
+    expect(result.items).toEqual([
+      {
+        id: LEGAL,
+        label: `${LEGAL}, linked from the footer`,
+        meta: { sections: { footer: 2 } },
+      },
+    ]);
+  });
+
+  test("leaves the items bare when no inbound link has a section", () => {
+    // The exact fixture and the exact assertion the crawls before link sections had.
+    expect(check(noContextualInboundRule, ctx(FOOTER_ONLY)).items).toEqual([
+      { id: LEGAL },
+    ]);
+    // `unknown` is no answer either.
+    const unknown: PageSpec[] = FOOTER_ONLY.map((p) => ({
+      ...p,
+      links: p.links.map((l) => (l.isChrome ? { ...l, section: "unknown" as const } : l)),
+    }));
+    expect(check(noContextualInboundRule, ctx(unknown)).items).toEqual([{ id: LEGAL }]);
+  });
+
+  test("more than two sections read as the first two and a count", () => {
+    const pages: PageSpec[] = [
+      { url: BASE, links: [body("/a"), footer("/legal")] },
+      { url: "https://example.com/a", links: [nav("/legal")] },
+      { url: "https://example.com/b", links: [{ ...chrome("/legal"), section: "sidebar" }] },
+      { url: "https://example.com/c", links: [{ ...chrome("/legal"), section: "header" }] },
+      { url: LEGAL, links: [] },
+    ];
+    const result = check(noContextualInboundRule, ctx(pages));
+
+    expect(result.items?.[0]?.label).toBe(
+      `${LEGAL}, linked only from the footer, the header and 2 more`
+    );
+  });
+
+  test("the streaming path reads siteQuery.inboundSectionCounts and gets the same item", () => {
+    const legacy = check(noContextualInboundRule, ctx(SECTIONED));
+    const viaQuery = check(
+      noContextualInboundRule,
+      streaming(SECTIONED, () => new Map([[LEGAL, { footer: 3, navigation: 1 }]]))
+    );
+
+    expect(viaQuery.items).toEqual(legacy.items);
+    expect(viaQuery.items?.[0]?.label).toBe(
+      `${LEGAL}, linked only from the footer and the navigation`
+    );
+  });
+
+  test("a siteQuery without inboundSectionCounts leaves the items bare", () => {
+    const result = check(noContextualInboundRule, streaming(SECTIONED));
+
+    expect(result.status).toBe("warn");
+    expect(result.items).toEqual([{ id: LEGAL }]);
+  });
+});
