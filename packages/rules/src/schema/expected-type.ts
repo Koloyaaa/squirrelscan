@@ -23,7 +23,7 @@ import { z } from "zod";
 
 import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
 
-import { bareTypeName, microdataAndRdfaTypes } from "./markup-types";
+import { UNREADABLE_MESSAGE, bareTypeName, jsonLdTypes, microdataAndRdfaTypes } from "./markup-types";
 
 export const optionsSchema = z.object({
   min_confidence: z
@@ -148,20 +148,38 @@ const FAMILIES: Readonly<Record<string, PageTypeFamily>> = {
   },
 };
 
-/** The page's declared types: lowercase key to the spelling the page used. */
-function declaredTypes(ctx: RuleContext): Map<string, string> {
-  const declared = new Map<string, string>();
-  const add = (raw: string): void => {
+interface DeclaredTypes {
+  /** Every type the page declares, nested JSON-LD, microdata and RDFa included: lowercase key to spelling. */
+  readonly all: Map<string, string>;
+  /** Only the JSON-LD top-level and `@graph` node types: what the listing veto reads. */
+  readonly topLevel: Map<string, string>;
+  /** False when a markup or JSON-LD scan hit a bound: absence is then not proven. */
+  readonly complete: boolean;
+}
+
+function declaredTypes(ctx: RuleContext): DeclaredTypes {
+  const all = new Map<string, string>();
+  const topLevel = new Map<string, string>();
+  const put = (into: Map<string, string>, raw: string): void => {
     const bare = bareTypeName(raw);
-    if (bare && !declared.has(bare.toLowerCase())) declared.set(bare.toLowerCase(), bare);
+    if (bare && !into.has(bare.toLowerCase())) into.set(bare.toLowerCase(), bare);
   };
-  // JSON-LD first (top-level nodes and @graph members), then microdata and RDFa:
-  // "declares no Product" must not be said of a page that declares one in markup.
+
+  // The parser's list is the top-level and @graph node types only. The veto reads
+  // exactly that: a nested `isPartOf: Blog` must not turn a post into a listing.
   for (const raw of ctx.parsed.schemas?.types ?? []) {
-    if (typeof raw === "string") add(raw);
+    if (typeof raw !== "string") continue;
+    put(topLevel, raw);
+    put(all, raw);
   }
-  for (const raw of microdataAndRdfaTypes(ctx.parsed.document)) add(raw);
-  return declared;
+  // "Declares no Product" must not be said of a page that declares one nested in
+  // another node (`WebPage.mainEntity`), or in microdata or RDFa.
+  const nested = jsonLdTypes(ctx.parsed.schemas?.all ?? []);
+  for (const raw of nested.types) put(all, raw);
+  const markup = microdataAndRdfaTypes(ctx.parsed.document);
+  for (const raw of markup.types) put(all, raw);
+
+  return { all, topLevel, complete: nested.complete && markup.complete };
 }
 
 function firstMatch(declared: Map<string, string>, test: (name: string) => boolean): string | null {
@@ -199,7 +217,7 @@ export const expectedTypeSchemaRule: Rule = {
   },
 
   run(ctx: RuleContext): RuleResult {
-    const opts = optionsSchema.parse(ctx.options);
+    const opts = optionsSchema.parse(ctx.options ?? {});
     const pageType = ctx.parsed.classification?.pageType;
 
     // Model answers only: a rules label is read from the schema (circular) or is a
@@ -240,11 +258,11 @@ export const expectedTypeSchemaRule: Rule = {
       pageType: pageType.label,
       confidence: Number(pageType.confidence.toFixed(2)),
       expected: family.wanted,
-      declared: [...declared.values()],
+      declared: [...declared.all.values()],
     };
     const checks: CheckResult[] = [];
 
-    const found = firstMatch(declared, family.matches);
+    const found = firstMatch(declared.all, family.matches);
     if (found) {
       checks.push({
         name: "expected-type",
@@ -256,7 +274,7 @@ export const expectedTypeSchemaRule: Rule = {
     }
 
     if (family.detail) {
-      const listing = firstMatch(declared, (name) => VETO_TYPES.has(name));
+      const listing = firstMatch(declared.topLevel, (name) => VETO_TYPES.has(name));
       if (listing) {
         checks.push({
           name: "expected-type",
@@ -266,6 +284,17 @@ export const expectedTypeSchemaRule: Rule = {
         });
         return { checks };
       }
+    }
+
+    // A scan that hit a bound proves nothing about what is absent.
+    if (!declared.complete) {
+      checks.push({
+        name: "expected-type",
+        status: "info",
+        message: UNREADABLE_MESSAGE,
+        details,
+      });
+      return { checks };
     }
 
     checks.push({

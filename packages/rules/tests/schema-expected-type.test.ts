@@ -10,6 +10,16 @@ import type { CheckResult, PageClassification } from "@squirrelscan/core-contrac
 import { parsePage } from "@squirrelscan/parser";
 
 import { expectedTypeSchemaRule } from "../src/schema/expected-type";
+import {
+  MAX_ANNOTATED_ELEMENTS,
+  MAX_JSONLD_DEPTH,
+  MAX_JSONLD_VALUES,
+  MAX_TOKENS_PER_ATTRIBUTE,
+  MAX_VISITED_NODES,
+  UNREADABLE_MESSAGE,
+  jsonLdTypes,
+  microdataAndRdfaTypes,
+} from "../src/schema/markup-types";
 import { loadAllRules } from "../src/loader";
 import type { ParsedPage, RuleContext } from "../src/types";
 
@@ -121,6 +131,64 @@ describe("schema/expected-type", () => {
     expect(only(ctxFor(html, classification("product_detail", Number.NaN))).status).toBe("info");
     const noConfidence = { pageType: { label: "product_detail", source: "model" }, degraded: "" } as unknown;
     expect(only(ctxFor(html, noConfidence as PageClassification)).status).toBe("info");
+  });
+
+  test("a Product nested as WebPage.mainEntity counts as declared", () => {
+    const html = withSchema({ "@type": "WebPage", mainEntity: { "@type": "Product", name: "Parka" } });
+    const check = only(ctxFor(html, classification("product_detail", 0.99)));
+    expect(check.status).toBe("pass");
+    expect(check.message).toBe("Product page declares Product");
+  });
+
+  test("a nested type inside an array of nodes counts as declared", () => {
+    const html = withSchema({ "@type": "WebPage", hasPart: [{ "@type": "Thing" }, { "@type": ["Product"] }] });
+    expect(only(ctxFor(html, classification("product_detail", 0.99))).status).toBe("pass");
+  });
+
+  test("a nested isPartOf Blog does not veto a post with no Article type", () => {
+    const html = withSchema({ "@type": "WebPage", isPartOf: { "@type": "Blog", name: "Blog" } });
+    const check = only(ctxFor(html, classification("blog_post", 0.97)));
+    expect(check.status).toBe("fail");
+  });
+
+  test("a top-level Blog still vetoes", () => {
+    expect(only(ctxFor(withSchema({ "@type": "Blog" }), classification("blog_post", 0.97))).status).toBe("pass");
+  });
+
+  test("an @context term definition is not read as a type", () => {
+    const html = withSchema({
+      "@context": { "@vocab": "https://schema.org/", url: { "@type": "Product" } },
+      "@type": "WebPage",
+    });
+    expect(only(ctxFor(html, classification("product_detail", 0.99))).status).toBe("fail");
+  });
+
+  test("markup too large to read is an info check, not a fail", () => {
+    const filler = '<i itemtype="https://example.com/Thing"></i>'.repeat(MAX_ANNOTATED_ELEMENTS + 1);
+    const check = only(ctxFor(`<html><body>${filler}</body></html>`, classification("product_detail", 0.99)));
+    expect(check.status).toBe("info");
+    expect(check.message).toBe(UNREADABLE_MESSAGE);
+  });
+
+  test("a found schema still passes when the rest of the markup is too large to read", () => {
+    const html = `<html><body><div itemtype="https://schema.org/Product"></div>${'<i itemtype="https://example.com/Thing"></i>'.repeat(
+      MAX_ANNOTATED_ELEMENTS + 1,
+    )}</body></html>`;
+    expect(only(ctxFor(html, classification("product_detail", 0.99))).status).toBe("pass");
+  });
+
+  test("a page with no document cannot be judged", () => {
+    const ctx = ctxFor("<html><body></body></html>", classification("product_detail", 0.99));
+    const unreadable = { ...ctx, parsed: { ...ctx.parsed, document: null } } as RuleContext;
+    const check = only(unreadable);
+    expect(check.status).toBe("info");
+    expect(check.message).toBe(UNREADABLE_MESSAGE);
+  });
+
+  test("missing ctx.options reads as the defaults", () => {
+    const ctx = ctxFor("<html><body></body></html>", classification("product_detail", 0.95));
+    const noOptions = { ...ctx, options: undefined } as unknown as RuleContext;
+    expect(only(noOptions).status).toBe("fail");
   });
 
   test("blog_post that declares CollectionPage is vetoed: read as a listing, not flagged", () => {
@@ -265,5 +333,67 @@ describe("schema/expected-type", () => {
     expect(rule!.meta.weight).toBe(5);
     expect(rule!.meta.verdictScope).toBe("page");
     expect(Object.keys(rule!.meta.optionsSchema?.shape ?? {})).toEqual(["min_confidence"]);
+  });
+});
+
+describe("markup-types scans are bounded", () => {
+  const parse = (html: string): Document => parsePage(html, "https://example.com/x").document as Document;
+
+  test("microdata and RDFa types are read case-insensitively and split on whitespace", () => {
+    const doc = parse(
+      '<html><body><div ITEMTYPE="https://schema.org/Product https://schema.org/Offer"></div><p typeof="schema:Person Organization"></p></body></html>',
+    );
+    const scan = microdataAndRdfaTypes(doc);
+    expect(scan.complete).toBe(true);
+    expect(scan.types.sort()).toEqual(["Offer", "Organization", "Person", "Product"]);
+  });
+
+  test("a token at the cap is read, one past it is not and the scan is incomplete", () => {
+    const filler = Array.from({ length: MAX_TOKENS_PER_ATTRIBUTE - 1 }, (_, i) => `https://example.com/T${i}`);
+    const atCap = microdataAndRdfaTypes(
+      parse(`<html><body><div itemtype="${[...filler, "https://schema.org/Product"].join(" ")}"></div></body></html>`),
+    );
+    expect(atCap.complete).toBe(true);
+    expect(atCap.types).toContain("Product");
+
+    const pastCap = microdataAndRdfaTypes(
+      parse(
+        `<html><body><div itemtype="${[...filler, "https://example.com/Last", "https://schema.org/Product"].join(" ")}"></div></body></html>`,
+      ),
+    );
+    expect(pastCap.complete).toBe(false);
+    expect(pastCap.types).not.toContain("Product");
+  });
+
+  test("an element budget stops the walk and reports it", () => {
+    const html = `<html><body>${"<b></b>".repeat(MAX_VISITED_NODES + 1)}</body></html>`;
+    expect(microdataAndRdfaTypes(parse(html)).complete).toBe(false);
+  });
+
+  test("a missing document is incomplete, not empty", () => {
+    expect(microdataAndRdfaTypes(null)).toEqual({ types: [], complete: false });
+  });
+
+  test("json-ld: nested types are read at the depth cap and not past it", () => {
+    let node: Record<string, unknown> = { "@type": "Product" };
+    for (let i = 0; i < MAX_JSONLD_DEPTH; i++) node = { "@type": "Thing", child: node };
+    const atCap = jsonLdTypes([node]);
+    expect(atCap.complete).toBe(true);
+    expect(atCap.types).toContain("Product");
+
+    const tooDeep = jsonLdTypes([{ "@type": "Thing", child: node }]);
+    expect(tooDeep.complete).toBe(false);
+    expect(tooDeep.types).not.toContain("Product");
+  });
+
+  test("json-ld: a value budget stops the scan and reports it", () => {
+    const wide = { "@type": "ItemList", itemListElement: Array.from({ length: MAX_JSONLD_VALUES + 1 }, () => ({})) };
+    expect(jsonLdTypes([wide]).complete).toBe(false);
+  });
+
+  test("json-ld: a self-referencing structure cannot loop", () => {
+    const cyclic: Record<string, unknown> = { "@type": "Thing" };
+    cyclic.self = cyclic;
+    expect(jsonLdTypes([cyclic]).complete).toBe(false);
   });
 });

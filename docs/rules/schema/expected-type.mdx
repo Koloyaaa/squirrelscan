@@ -11,7 +11,7 @@ Structured data is what makes a product page eligible for product rich results, 
 
 ## What squirrel checks
 
-The rule runs on every crawled page and emits one check named `expected-type`. It reads the page type the classifier stored for the page and the types the page declares: JSON-LD top-level nodes and `@graph` members, microdata `itemtype` values and RDFa `typeof` values. Types are compared case-insensitively, and a prefix such as `https://schema.org/` or `schema:` is ignored.
+The rule runs on every crawled page and emits one check named `expected-type`. It reads the page type the classifier stored for the page and the types the page declares: JSON-LD nodes at any depth, including `@graph` members and nested ones such as the `mainEntity` of a `WebPage`, microdata `itemtype` values and RDFa `typeof` values. Types are compared case-insensitively, and a prefix such as `https://schema.org/` or `schema:` is ignored.
 
 Only a page type the **model** answered is trusted, and only at or above the `min_confidence` option (0.9 by default). When the classifier fell back to its rules path, the label came from the page's own JSON-LD `@type` or `og:type`, so judging the markup against it would be circular. The rule is also silent for a page with no classification at all, which is what you get with `--no-classifier` or `classifier.enabled = false`.
 
@@ -19,6 +19,7 @@ Only a page type the **model** answered is trusted, and only at or above the `mi
 - Info with the message `No structured data expected for this page type` and the label as the value, for the page types that carry no expectation: `homepage`, `legal`, `pricing`, `other` and `unknown`. The site-level `WebSite` and `Organization` nodes have their own rules, [schema/entity-website-missing](/rules/schema/entity-website-missing) and [schema/entity-organization-missing](/rules/schema/entity-organization-missing).
 - Pass with the message `<Page noun> declares <type>` when the page declares at least one type from the family for its label. The type is the spelling the page used. The nouns are in the table below.
 - Pass with the message `Page declares <type>, read as a listing` when the page is read as an `article`, `blog_post` or `product_detail`, declares none of that family, and declares `CollectionPage`, `ItemList`, `SearchResultsPage` or `Blog`. The markup may veto a finding, never create one: a blog index or pillar page the model reads as a post is a listing, and is not asked for `Article` markup.
+- Info with the message `Page markup too large to judge structured data`, when the page declares nothing from the family but a read hit one of those bounds. It is not a finding, because a missing schema is not proven.
 - Fail with the message `Reads as <a|an> <page noun> but declares no <expected types> structured data`, when neither of the above holds. The message does not carry the confidence, so a report groups the failing pages of one page type into one finding. The check carries `details` with the page type, the confidence to two decimals, the expected types and the types the page does declare.
 
 | Page type | Noun | Schema types that satisfy it |
@@ -34,7 +35,7 @@ Only a page type the **model** answered is trusted, and only at or above the `mi
 
 An organization type is `Organization`, `Corporation`, `NGO`, `Brand`, `Airline`, `Consortium`, `ProfessionalService`, `EducationalOrganization`, `GovernmentOrganization`, `MedicalOrganization`, `SportsOrganization`, `PerformingGroup`, every `LocalBusiness` subtype such as `Restaurant` or `Dentist`, and any type ending in `Business` or `Organization`. `JobPosting` is not an article.
 
-In JSON-LD only top-level nodes and `@graph` members count. A `Product` nested inside another node, for example as the `mainEntity` of a `WebPage`, is not read as the page's own type. Severity is warning and weight is 5. The rule is skipped on a page detected as a soft 404, because an error template says nothing about what the site meant the page to be.
+The listing veto reads only top-level and `@graph` node types, so a nested `isPartOf` of type `Blog` does not turn a post into a listing. The reads are bounded: JSON-LD is read to a depth of 8 and 2,000 objects, microdata and RDFa to 50,000 elements, 5,000 annotated elements and 64 types per attribute. When a bound is hit, or the page has no document, the rule does not claim a schema is missing. Severity is warning and weight is 5. The rule is skipped on a page detected as a soft 404, because an error template says nothing about what the site meant the page to be.
 
 ## How to fix it
 
