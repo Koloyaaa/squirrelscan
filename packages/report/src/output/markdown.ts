@@ -15,7 +15,12 @@ import {
   moreSourcePages,
   sourceRowText,
 } from "../item-sources";
-import { checkPagesScopedAway, checkRegionScope, regionScopeLine } from "../region-scope";
+import {
+  checkPagesScopedAway,
+  checkRegionScope,
+  itemLabel,
+  regionScopeLine,
+} from "../region-scope";
 import { entityMarkdownSection } from "../entities";
 import {
   structureChromeLine,
@@ -603,7 +608,9 @@ export function renderMarkdown(report: AuditReport, options?: MarkdownRenderOpti
           );
           lines.push("");
           for (const item of visibleItems) {
-            const label = escapeItemLabel(item.label ?? item.id);
+            const view = itemSourceView(item, report.structure);
+            // pub#846: a scoped item's label drops the section phrase its region line says.
+            const label = escapeItemLabel(itemLabel(item, view.scope) ?? item.id);
             const isUrl =
               item.id.startsWith("http://") ||
               item.id.startsWith("https://") ||
@@ -614,7 +621,6 @@ export function renderMarkdown(report: AuditReport, options?: MarkdownRenderOpti
             // how many pages it leaves out; the page block above lists the check's pages,
             // not this item's, so it is not pointed at. pub#846: an item scoped to a region
             // names it, and lists only the pages it is on outside it.
-            const view = itemSourceView(item, report.structure);
             if (view.scope) lines.push(`  - ${regionScopeLine(view.scope)}`);
             const shown = view.rows.slice(0, REPORT_SOURCE_PAGES_PREVIEW);
             for (const row of shown) {

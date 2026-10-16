@@ -130,9 +130,11 @@ describe("console broken link sources (pub#837)", () => {
       sections: { footer: 1 },
     }));
     const report = brokenLinks(sources);
-    report.ruleResults["links/broken-links"]!.checks[0]!.items![0]!.regions = {
-      footer: 12,
-    };
+    const item =
+      report.ruleResults["links/broken-links"]!.checks[0]!.items![0]!;
+    item.regions = { footer: 12 };
+    item.label = `${SITE}/gone (404), linked in the footer`;
+    item.meta = { statusCode: 404, sections: { footer: 12 } };
     report.structure = {
       pages: 13,
       sections: [{ section: "footer", pages: 13, links: 40 }],
@@ -144,5 +146,8 @@ describe("console broken link sources (pub#837)", () => {
     const out = capture(report);
     expect(out).toContain("In the site footer, on 12 of 13 pages");
     expect(out).not.toContain("from /p0");
+    // The region line says where it is, so the label drops its section phrase.
+    expect(out).toContain(`→ ${SITE}/gone (404)`);
+    expect(out).not.toContain("linked in the footer");
   });
 });

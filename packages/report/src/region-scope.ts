@@ -4,7 +4,12 @@
 // (`regions`, or a check's `details.region`) against the pages that have that region
 // (`structure.sections`). Nothing here changes a finding, its severity or the score.
 
-import type { CheckItem, ReportStructure } from "@squirrelscan/core-contracts";
+import {
+  linkSectionPhrase,
+  type CheckItem,
+  type LinkSectionCounts,
+  type ReportStructure,
+} from "@squirrelscan/core-contracts";
 
 import { isRedundantPageItem } from "./affected-pages";
 import { structureNumber } from "./structure";
@@ -157,6 +162,23 @@ export function regionScopeLine(scope: RegionScope): string {
       ? `, and on ${structureNumber(scope.otherPages)} other ${scope.otherPages === 1 ? "page" : "pages"}`
       : "";
   return `In ${REGION_NAME[scope.region]}, on ${structureNumber(scope.pages)} of ${structureNumber(scope.regionPages)} ${scope.regionPages === 1 ? "page" : "pages"}${other}`;
+}
+
+/**
+ * The label a format prints for an item, or undefined when it has none of its own. An item shown
+ * in a region drops the ", linked in the footer" phrase its rule added from `meta.sections`: the
+ * region line says where it is. Any other label, and every unscoped item's, is as the rule wrote it.
+ */
+export function itemLabel(item: CheckItem, scope: RegionScope | undefined): string | undefined {
+  const label = item.label;
+  if (!label || !scope) return label;
+  const sections = item.meta?.sections;
+  if (!sections || typeof sections !== "object") return label;
+  const phrase = linkSectionPhrase(sections as LinkSectionCounts);
+  const suffix = phrase ? `, linked ${phrase}` : "";
+  if (!suffix || !label.endsWith(suffix)) return label;
+  const bare = label.slice(0, -suffix.length);
+  return bare && bare !== item.id ? bare : undefined;
 }
 
 /** The scope as data for JSON and XML: `{ region, pages, regionPages, otherPages }`. */

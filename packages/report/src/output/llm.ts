@@ -17,7 +17,12 @@ import {
   moreSourcePages,
   sourceRowText,
 } from "../item-sources";
-import { checkPagesScopedAway, checkRegionScope, regionScopeLine } from "../region-scope";
+import {
+  checkPagesScopedAway,
+  checkRegionScope,
+  itemLabel,
+  regionScopeLine,
+} from "../region-scope";
 
 /** "in the site footer, ..." from "In the site footer, ...", to sit inside a sentence. */
 const lowerFirst = (text: string): string => text.charAt(0).toLowerCase() + text.slice(1);
@@ -507,7 +512,11 @@ export function renderLlm(report: AuditReport, options?: LlmRenderOptions): stri
         for (const item of sampledItems) {
           const itemId = item.id.startsWith("http") ? compressUrl(item.id, baseOrigin) : item.id;
           let itemLine = `${indent(3)}- ${escapeXml(itemId)}`;
-          if (item.label && item.label !== item.id) itemLine += ` (${escapeXml(item.label)})`;
+          // pub#837/#846: the item's pages, and the region it is shown in; a scoped item's label
+          // drops the section phrase the region says.
+          const view = itemSourceView(item, report.structure);
+          const label = itemLabel(item, view.scope);
+          if (label && label !== item.id) itemLine += ` (${escapeXml(label)})`;
           if (item.snippet) itemLine += ` | ${escapeXml(item.snippet)}`;
           if (item.meta) {
             const metaParts: string[] = [];
@@ -521,7 +530,6 @@ export function renderLlm(report: AuditReport, options?: LlmRenderOptions): stri
           }
           // pub#837: each page once, with its links and where they sit. pub#846: an item
           // scoped to a region names it, then the pages it is on outside it.
-          const view = itemSourceView(item, report.structure);
           const shown = view.rows.slice(0, LLM_REPORT.maxItemSourcePages);
           const hidden = Math.max(0, view.total - shown.length);
           const sources = shown

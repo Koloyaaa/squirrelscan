@@ -15,7 +15,12 @@ import {
   moreSourcePages,
   sourceRowText,
 } from "../item-sources";
-import { checkPagesScopedAway, checkRegionScope, regionScopeLine } from "../region-scope";
+import {
+  checkPagesScopedAway,
+  checkRegionScope,
+  itemLabel,
+  regionScopeLine,
+} from "../region-scope";
 import {
   ENTITY_CONSOLE_LIMIT,
   ENTITY_EMPTY_MESSAGE,
@@ -412,13 +417,13 @@ export function renderText(report: AuditReport, options?: TextRenderOptions): st
         const left = itemsNotListed(check);
         if (check.items && check.items.length > 0) {
           for (const item of check.items) {
-            const label = item.label ?? item.id;
+            // pub#837: each page once, with its links and where they sit; a long list says how
+            // many pages it leaves out. pub#846: an item scoped to a region names it, lists only
+            // the pages it is on outside it, and its label drops the section phrase.
+            const view = itemSourceView(item, report.structure);
+            const label = itemLabel(item, view.scope) ?? item.id;
             write(`        -> ${label}`);
             if (item.snippet) write(`           ${item.snippet}`);
-            // pub#837: each page once, with its links and where they sit; a long list says how
-            // many pages it leaves out. pub#846: an item scoped to a region names it, and lists
-            // only the pages it is on outside it.
-            const view = itemSourceView(item, report.structure);
             if (view.scope) write(`            ${regionScopeLine(view.scope)}`);
             const shown = view.rows.slice(0, REPORT_SOURCE_PAGES_PREVIEW);
             for (const row of shown) {

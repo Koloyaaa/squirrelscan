@@ -139,7 +139,9 @@ against the pages that have the region, not every audited page, so a footer
 missing from a few pages does not hide a finding that is on every footer. A
 sidebar on 6 pages is judged against those 6. When the finding is also
 elsewhere, the line says so (`, and on 3 other pages`) and those other pages
-are listed under it.
+are listed under it. The item's label then leaves out its own section phrase
+(`https://example.com/old (404)`, not `..., linked in the footer`), since the
+region line says where it is; an item that is not shown for a region keeps it.
 
 The Markdown, text, LLM and console reports print the region line and no
 per-page list, and leave out the check's page list when its findings name their
