@@ -731,6 +731,14 @@ When an item sits in a template region (the site header, footer or navigation, a
 
 `region` is `header`, `footer`, `navigation`, `sidebar`, `breadcrumbs`, `pagination`, `newsletter_signup`, `social_share`, `business_info` or `account_login`; `pages` is the pages the item sits on in the region; `regionPages` is the audited pages that have the region (from the [page structure](#page-structure) block); `otherPages` is the pages the item is on outside it. The XML report writes the same as `<scope region="header" pages="49" region-pages="53" other-pages="3"/>` inside the item or check. An item with a `scope` has the section phrase taken off its `label` (`https://example.com/old (404)`, not `https://example.com/old (404), linked in the footer`), in every format, as the region says where it is; `meta.sections` still carries the counts. An item with no `scope` keeps its page rows and its label.
 
+A check that names a classifier page type in `details.pageType` (with `details.pageTypeSource` set to `"model"`), and is on every page or nearly every page of that type, gets a `scope` of its own, beside its bounded page list; see [findings on every page of one page type](/reports#findings-on-every-page-of-one-page-type):
+
+```json
+"scope": { "pageType": "docs", "pages": 9, "typePages": 11 }
+```
+
+`pageType` is the classifier's label, `pages` is the pages the check is on, and `typePages` is the audited pages of that type, from the [page structure](#page-structure) block. The XML report writes `<scope page-type="docs" pages="9" type-pages="11"/>` in the check. A `scope` with `region` is a region and one with `pageType` is a page type; a check has at most one.
+
 ---
 
 ### Report detail
