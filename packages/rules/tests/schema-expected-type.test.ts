@@ -66,7 +66,7 @@ describe("schema/expected-type", () => {
     const check = only(ctxFor(withSchema({ "@type": "WebPage", name: "x" }), classification("product_detail", 0.99)));
     expect(check.status).toBe("fail");
     expect(check.message).toBe("Reads as a product page but declares no Product structured data");
-    expect(check.details).toMatchObject({ pageType: "product_detail", confidence: 0.99, expected: "Product" });
+    expect(check.details).toMatchObject({ pageType: "product_detail", pageTypeSource: "model", confidence: 0.99, expected: "Product" });
   });
 
   test("two pages of one page type at different confidences share one message", () => {

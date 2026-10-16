@@ -305,12 +305,24 @@ export {
   TEMPLATE_REGIONS,
   checkPagesScopedAway,
   checkRegionScope,
+  checkScopeLine,
   itemLabel,
   itemRegionScope,
   regionScopeData,
   regionScopeLine,
 } from "./region-scope";
 export type { RegionScope, TemplateRegion } from "./region-scope";
+
+// pub#857: a finding on every page of one page type names the type instead of listing its pages.
+export {
+  PAGE_TYPE_SCOPE_MIN_PAGES,
+  PAGE_TYPE_SCOPE_MIN_SHARE,
+  PAGE_TYPE_SCOPE_SOURCE,
+  checkPageTypeScope,
+  pageTypeScopeData,
+  pageTypeScopeLine,
+} from "./page-type-scope";
+export type { PageTypeScope, PageTypeScopeCheck } from "./page-type-scope";
 
 // Failed/blocked audit notice copy (#792, #935) — single source of truth for
 // the static HTML report's FailureNotice and the dashboard's report-detail notice.

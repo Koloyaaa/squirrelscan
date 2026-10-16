@@ -12,6 +12,7 @@ import {
 } from "@squirrelscan/core-contracts";
 
 import { isRedundantPageItem } from "./affected-pages";
+import { checkPageTypeScope, pageTypeScopeLine, type PageTypeScopeCheck } from "./page-type-scope";
 import { structureNumber } from "./structure";
 
 /**
@@ -139,20 +140,36 @@ export function checkRegionScope(
 
 /**
  * True when a check's page list gives way to its findings' regions: the check is scoped to a
- * region, or an item it shows is, and every item carries its own pages (its rows, or its region
- * line and the pages it is on outside it). The compact formats then leave the check's list out,
- * and HTML keeps it collapsed. A check with an item that IS a page keeps the list, which is where
- * that page is shown.
+ * region or a page type (pub#857), or an item it shows is scoped to a region, and every item
+ * carries its own pages (its rows, or its region line and the pages it is on outside it). The
+ * compact formats then leave the check's list out, and HTML keeps it collapsed. A check with an
+ * item that IS a page keeps the list, which is where that page is shown.
  */
 export function checkPagesScopedAway(
-  check: { details?: Record<string, unknown>; items?: CheckItem[] },
+  check: PageTypeScopeCheck & { items?: CheckItem[] },
   pages: number,
   structure: ReportStructure | undefined,
 ): boolean {
   if (checkRegionScope(check, pages, structure)) return true;
+  if (checkPageTypeScope(check, pages, structure)) return true;
   const items = check.items ?? [];
   if (items.length === 0 || items.some(isRedundantPageItem)) return false;
   return items.some((item) => itemRegionScope(item, structure) !== undefined);
+}
+
+/**
+ * The one line that stands in for a whole check's page list, or undefined to keep the list: the
+ * shared region it sits in (pub#846), else the page type every one of its pages is (pub#857).
+ */
+export function checkScopeLine(
+  check: PageTypeScopeCheck,
+  pages: number,
+  structure: ReportStructure | undefined,
+): string | undefined {
+  const region = checkRegionScope(check, pages, structure);
+  if (region) return regionScopeLine(region);
+  const type = checkPageTypeScope(check, pages, structure);
+  return type ? pageTypeScopeLine(type) : undefined;
 }
 
 /** "In the site footer, on 49 of 53 pages", and ", and on 3 other pages" when it is elsewhere too. */

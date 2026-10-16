@@ -19,7 +19,7 @@ import {
 } from "../item-sources";
 import {
   checkPagesScopedAway,
-  checkRegionScope,
+  checkScopeLine,
   itemLabel,
   regionScopeLine,
 } from "../region-scope";
@@ -461,32 +461,36 @@ export function renderLlm(report: AuditReport, options?: LlmRenderOptions): stri
       // 200/600). `hasMore` marks the floor as a lower bound (2+ truncated
       // checks with possibly-disjoint hidden pages) → suffix "+".
       const rollup = ruleAffectedRollup(rule.checks);
-      const totalPages = rollup.count;
-      const totalLabel = `${totalPages}${rollup.hasMore ? "+" : ""}`;
+      const totalLabel = `${rollup.count}${rollup.hasMore ? "+" : ""}`;
   
-      // pub#846: a rule whose findings all name their region lists no pages here: each check
-      // and item says where it is.
-      const scopedAway = rule.checks.every((c) =>
+      // pub#846/#857: a check that names its region or its page type lists no pages here: its own
+      // line says where it is. The pages of the rule's other checks are still listed, so a
+      // documentation check on all 9 pages and a contact check below the share both read right.
+      const scopedChecks = rule.checks.filter((c) =>
         checkPagesScopedAway(c, affectedPages(c).count, report.structure),
       );
-      if (allPages.size > 0 && scopedAway) {
+      const openChecks = rule.checks.filter((c) => !scopedChecks.includes(c));
+      const openPages = ruleAffectedPages(openChecks);
+      const openRollup = ruleAffectedRollup(openChecks);
+      const openLabel = `${openRollup.count}${openRollup.hasMore ? "+" : ""}`;
+      if (allPages.size > 0 && openChecks.length === 0) {
         lines.push(`${indent(2)}Pages (${totalLabel})`);
-        for (const c of rule.checks) {
-          const scope = checkRegionScope(c, affectedPages(c).count, report.structure);
-          if (scope) lines.push(`${indent(2)}${escapeXml(regionScopeLine(scope))}`);
-        }
-      } else if (allPages.size > 0) {
-        const sampledPages = sampleAffectedPagesBreadthFirst(Array.from(allPages), baseOrigin);
+      } else if (openPages.size > 0) {
+        const sampledPages = sampleAffectedPagesBreadthFirst(Array.from(openPages), baseOrigin);
         const pageList = sampledPages
           .map((p) => escapeXml(compressUrl(p, baseOrigin)))
           .join(", ");
-        if (sampledPages.length < totalPages) {
-          lines.push(`${indent(2)}Pages (${sampledPages.length}/${totalLabel}): ${pageList}`);
+        if (sampledPages.length < openRollup.count) {
+          lines.push(`${indent(2)}Pages (${sampledPages.length}/${openLabel}): ${pageList}`);
         } else {
-          lines.push(`${indent(2)}Pages (${totalLabel}): ${pageList}`);
+          lines.push(`${indent(2)}Pages (${openLabel}): ${pageList}`);
         }
       }
-  
+      for (const c of scopedChecks) {
+        const scope = checkScopeLine(c, affectedPages(c).count, report.structure);
+        if (scope) lines.push(`${indent(2)}${escapeXml(scope)}`);
+      }
+
       const allItems: CheckItem[] = [];
       // repo#2661: items a capped (or clamped) check left out still count.
       // `details.additional` is always items LEFT OUT of `items`: the fold's and

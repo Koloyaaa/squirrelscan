@@ -15,6 +15,7 @@ import {
   regionScopeData,
   type RegionScope,
 } from "../region-scope";
+import { checkPageTypeScope, pageTypeScopeData, type PageTypeScope } from "../page-type-scope";
 import { techIconUrl } from "../technologies";
 import { domainAgeYears, siteProfileRows } from "../site-metadata";
 import { editorSummaryView } from "../editor-summary";
@@ -148,8 +149,12 @@ interface SlimJsonReport {
       affectedPages: string[];
       affectedPagesCount: number;
       affectedPagesHasMore: boolean;
-      /** The shared region a check that only reads one is shown in (pub#846). */
-      scope?: RegionScope;
+      /**
+       * What stands in for the check's page list: the shared region a check that only reads one is
+       * shown in (pub#846, `{ region, pages, regionPages, otherPages }`), or the page type every
+       * one of its pages is (pub#857, `{ pageType, pages, typePages }`).
+       */
+      scope?: RegionScope | PageTypeScope;
       /** Each item may carry the region it is shown in, `scope` (pub#846). */
       items?: Array<CheckItem & { scope?: RegionScope }>;
       details?: Record<string, unknown>;
@@ -356,7 +361,10 @@ function buildSlimReport(report: AuditReport, version: string): SlimJsonReport {
           // #1023 R-F: affectedPages is a labeled sample; count is authoritative.
           const ap = affectedPages(check);
           // pub#846: the region a check or item is shown in, beside the bounded page lists.
-          const checkScope = checkRegionScope(check, ap.count, report.structure);
+          const regionScope = checkRegionScope(check, ap.count, report.structure);
+          const typeScope = regionScope
+            ? undefined
+            : checkPageTypeScope(check, ap.count, report.structure);
           return {
             name: check.name,
             status: check.status as "fail" | "warn",
@@ -364,7 +372,11 @@ function buildSlimReport(report: AuditReport, version: string): SlimJsonReport {
             affectedPages: ap.sample,
             affectedPagesCount: ap.count,
             affectedPagesHasMore: ap.hasMore,
-            ...(checkScope ? { scope: regionScopeData(checkScope) } : {}),
+            ...(regionScope
+              ? { scope: regionScopeData(regionScope) }
+              : typeScope
+                ? { scope: pageTypeScopeData(typeScope) }
+                : {}),
             items: check.items?.map((item) => {
               const scope = itemRegionScope(item, report.structure);
               if (!scope) return item;
