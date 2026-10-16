@@ -191,6 +191,7 @@ import type {
   AuditStatus as _AS,
   CacheStats as _CST,
   CategoryScore as _CS,
+  CheckItemSource,
   DomainStats as _DST,
   EditorSummary as _ES,
   EntityMap as _EM,
@@ -222,6 +223,8 @@ export interface CheckItem {
   label?: string; // Human-readable label (defaults to id if not set)
   snippet?: string; // Truncated HTML context (e.g., '<img src="..." alt="">')
   sourcePages?: string[]; // Pages where this item appears (for site-scope rules)
+  pageCount?: number; // Pages it was found on when sourcePages lists fewer (published reports)
+  sources?: CheckItemSource[]; // Per source page: links to the item and their sections (pub#837)
   meta?: Record<string, unknown>; // Rule-specific metadata (e.g., { status: 404, density: 3.2 })
 }
 

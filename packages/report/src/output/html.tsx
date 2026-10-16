@@ -10,8 +10,14 @@ import {
   PiUsersThree,
 } from "react-icons/pi";
 
-import type { ReportBranding } from "@squirrelscan/core-contracts";
+import type { CheckItem, ReportBranding } from "@squirrelscan/core-contracts";
 import type { AuditReport } from "../types";
+import {
+  affectedPagesSuffix,
+  itemSourceList,
+  moreSourcePages,
+  type ItemSourceRow,
+} from "../item-sources";
 import { getScoreGrade, getScoreColor, getGroupColor } from "../scoring";
 import {
   REPORT_COLLAPSE_THRESHOLD,
@@ -811,6 +817,42 @@ function PagesList({
   );
 }
 
+/**
+ * The pages an item was found on, one row each (pub#837): "from: /about (2 links, in the
+ * footer)". The first few show; the rest expand in place, so the full list sits inside the item
+ * rather than in the check's page list, which lists the check's pages, not this item's. Rows past
+ * the hard cap, and pages a published report does not list, are counted, never dropped silently.
+ */
+function ItemSources({ item }: { item: CheckItem }) {
+  const { rows, unlisted } = itemSourceList(item);
+  if (rows.length === 0 && unlisted === 0) return null;
+  const materialized = rows.slice(0, REPORT_PAGES_HARD_CAP);
+  const shown = materialized.slice(0, REPORT_SOURCE_PAGES_PREVIEW);
+  const rest = materialized.slice(REPORT_SOURCE_PAGES_PREVIEW);
+  const notShown = rows.length - materialized.length + unlisted;
+  const renderRow = (row: ItemSourceRow, j: number) => (
+    <div key={j}>
+      from:{" "}
+      <a href={sanitizeUrl(row.page)} target="_blank" rel="noopener noreferrer">
+        {getPathname(row.page) || "/"}
+      </a>
+      {row.detail ? ` (${row.detail})` : ""}
+    </div>
+  );
+  return (
+    <div style={{ paddingLeft: "1rem", fontSize: "0.8rem" }}>
+      {shown.map(renderRow)}
+      {rest.length > 0 && (
+        <details className="pages-more">
+          <summary>{moreSourcePages(rest.length)}</summary>
+          {rest.map((row, j) => renderRow(row, REPORT_SOURCE_PAGES_PREVIEW + j))}
+        </details>
+      )}
+      {notShown > 0 && <div>{moreSourcePages(notShown)} not listed in this report</div>}
+    </div>
+  );
+}
+
 // Flat issues list in ONE global severity order (#1536): error →
 // recommendation → warning, then category priority, then rule weight. Groups
 // are no longer contiguous, so the `group-*` anchors the score circles link to
@@ -967,7 +1009,7 @@ function IssuesByGroup({ categories }: { categories: GroupedCategory[] }) {
                                 <div className="issue-content">
                                   <div className="issue-message">
                                     {check.message}
-                                    {ap.count > 1 ? ` (${ap.count} pages)` : ""}
+                                    {affectedPagesSuffix(check, ap.count)}
                                   </div>
                                   {(carriedLabel || partialCarried) && (
                                     <div className="carried-note">{carriedLabel ?? partialCarried}</div>
@@ -1008,43 +1050,7 @@ function IssuesByGroup({ categories }: { categories: GroupedCategory[] }) {
                                               ) : (
                                                 <span>{label}</span>
                                               )}
-                                              {item.sourcePages && item.sourcePages.length > 0 && (
-                                                <div
-                                                  style={{
-                                                    paddingLeft: "1rem",
-                                                    fontSize: "0.8rem",
-                                                  }}
-                                                >
-                                                  {item.sourcePages
-                                                    .slice(0, REPORT_SOURCE_PAGES_PREVIEW)
-                                                    .map((src, j) => (
-                                                      <div key={j}>
-                                                        from:{" "}
-                                                        <a
-                                                          href={sanitizeUrl(src)}
-                                                          target="_blank"
-                                                          rel="noopener noreferrer"
-                                                        >
-                                                          {getPathname(src) || "/"}
-                                                        </a>
-                                                      </div>
-                                                    ))}
-                                                  {/* #1136 review: this preview is capped for
-                                                      readability, not truncated with a dead end —
-                                                      the full list (expand + copy) is the unified
-                                                      PagesList rendered above, covering this
-                                                      item's sourcePages too via checkAffectedPages. */}
-                                                  {item.sourcePages.length >
-                                                    REPORT_SOURCE_PAGES_PREVIEW && (
-                                                    <div>
-                                                      +
-                                                      {item.sourcePages.length -
-                                                        REPORT_SOURCE_PAGES_PREVIEW}{" "}
-                                                      more (see full list above)
-                                                    </div>
-                                                  )}
-                                                </div>
-                                              )}
+                                              <ItemSources item={item} />
                                             </div>
                                           );
                                         })}

@@ -286,6 +286,17 @@ export {
 } from "./affected-pages";
 export type { AffectedPages, RuleAffectedRollup } from "./affected-pages";
 
+// pub#837: an item's source pages as rows, each page once with its links and sections, and the
+// summary suffix that keeps links and pages apart. Shared by every renderer and the CLI console.
+export {
+  affectedPagesSuffix,
+  hasItemSources,
+  itemSourceList,
+  moreSourcePages,
+  sourceRowText,
+} from "./item-sources";
+export type { ItemSourceList, ItemSourceRow } from "./item-sources";
+
 // Failed/blocked audit notice copy (#792, #935) — single source of truth for
 // the static HTML report's FailureNotice and the dashboard's report-detail notice.
 export {

@@ -6,9 +6,15 @@ import { AUDIT_FAILURE_NEXT_STEP } from "@squirrelscan/core-contracts/failure-re
 import { cacheReasonsLabel, cacheStatsSummaryLine } from "../cache-stats";
 import { refusedFetchLines, reportFailureReasonCode } from "../failure-notice";
 import { getScoreGrade } from "../scoring";
-import { REPORT_TEXT_WRAP_WIDTH } from "../constants";
+import { REPORT_SOURCE_PAGES_PREVIEW, REPORT_TEXT_WRAP_WIDTH } from "../constants";
 import { groupIssuesByCategory, flattenIssuesBySeverity } from "../grouping";
 import { affectedPages, itemsNotListed, itemsNotListedLine } from "../affected-pages";
+import {
+  affectedPagesSuffix,
+  itemSourceList,
+  moreSourcePages,
+  sourceRowText,
+} from "../item-sources";
 import {
   ENTITY_CONSOLE_LIMIT,
   ENTITY_EMPTY_MESSAGE,
@@ -386,7 +392,7 @@ export function renderText(report: AuditReport, options?: TextRenderOptions): st
         // #1023 R-F: authoritative page count (true pre-sample total) + the
         // union sample (pages + item page-refs), labeled examples when clipped.
         const { sample, count, hasMore } = affectedPages(check);
-        const countStr = count > 1 ? ` (${count} pages)` : "";
+        const countStr = affectedPagesSuffix(check, count);
         const icon = check.status === "fail" ? "X" : "!";
         write(`    [${icon}] ${check.name}: ${check.message}${countStr}${carriedTag(check)}`);
 
@@ -403,9 +409,14 @@ export function renderText(report: AuditReport, options?: TextRenderOptions): st
             const label = item.label ?? item.id;
             write(`        -> ${label}`);
             if (item.snippet) write(`           ${item.snippet}`);
-            if (item.sourcePages && item.sourcePages.length > 0) {
-              for (const src of item.sourcePages) write(`            from: ${pathOnly(src)}`);
+            // pub#837: each page once, with its links and where they sit; a long list says how
+            // many pages it leaves out.
+            const { rows, unlisted } = itemSourceList(item);
+            for (const row of rows.slice(0, REPORT_SOURCE_PAGES_PREVIEW)) {
+              write(`            from: ${sourceRowText(pathOnly(row.page), row.detail)}`);
             }
+            const hidden = Math.max(0, rows.length - REPORT_SOURCE_PAGES_PREVIEW) + unlisted;
+            if (hidden > 0) write(`            ${moreSourcePages(hidden)}`);
           }
           if (left > 0) write(`        ... and ${left.toLocaleString("en-US")} more items not listed`);
         } else if (left > 0) {
