@@ -14,8 +14,20 @@ An icon-only link has the same problem in a harder form: there is no text at all
 Two checks, at rule severity warning. Both walk every `a[href]`, skipping fragment-only links whose `href` starts with `#` and links using an unsafe scheme such as `javascript:`.
 
 - `link-text-empty` fails when a link has neither an accessible name from `aria-labelledby`, `aria-label` or `title`, nor accessible content: text, an `<img>` with non-empty `alt`, an `<svg>` carrying a `<title>`, `aria-label` or `aria-labelledby`, or a `[role="img"]` with an `aria-label`. Report message: `N link(s) with no accessible text`. Each item is the first 50 characters of the `href`, labelled with the reason: `empty`, `svg-no-name`, `icon-font` or `role-img-no-name`.
-- `link-text-generic` warns when the link's accessible name, or its text, lowercased and stripped of punctuation, exactly matches one of 54 generic phrases. The list includes `click here`, `here`, `read more`, `learn more`, `more`, `link`, `download`, `view`, `sign up`, `submit`, `next`, `view details`, `website` and `discover`. Report message: `N link(s) with generic text`, listing each distinct phrase once.
+- `link-text-generic` warns when the link's accessible name, or its text, lowercased and stripped of punctuation, exactly matches one of 48 generic phrases, unless it is a conventional label (below). The list includes `click here`, `here`, `read more`, `learn more`, `more`, `link`, `download`, `view`, `subscribe`, `join`, `submit`, `next`, `view details`, `website` and `discover`. Report message: `N link(s) with generic text`, listing each distinct phrase once.
 - `link-text` passes with `All links have descriptive text` when neither problem appears on a page that has links.
+
+### Conventional labels are not flagged
+
+A link that reads "Sign in", "Log out" or "Terms" does name its destination. These are the standard labels for an account action or a site-utility page, so they are never reported, even though a header link such as "Sign in" would otherwise repeat on every page.
+
+- **Account actions:** sign in, sign up, log in, log out, sign out, register, my account, and the same forms without the space (`signin`, `signup`, `login`, `logout`).
+- **Legal and utility pages:** terms, terms of service, terms and conditions, privacy, privacy policy, legal notice, imprint, DMCA, copyright, cookies, cookie policy, accessibility, sitemap, contact, about, help, FAQ and careers.
+- **Languages:** English, Spanish, French, German, Portuguese, Italian, Dutch, Japanese, Chinese (simplified and traditional), Korean and Russian. Examples: `Iniciar sesión`, `Mentions légales`, `Impressum`, `Datenschutz`, `Termos de uso`, `Informativa sulla privacy`, `Privacybeleid`, `ログイン`, `利用規約`, `登录`, `联系我们`, `로그인`, `Войти`.
+
+The whole link text has to be the label. "Sign in to continue" is judged like any other text, and so is a label that is part of a longer sentence. Case, surrounding punctuation, non-breaking spaces, full-width characters, hyphens, a trailing arrow such as `→` or `»`, and accents on Latin letters do not matter, so `SIGN IN`, `Sign-in.`, `Sign in →`, `Se connecter` and `Datenschutzerklaerung` all count. The labels of every language are checked together, so squirrel does not need to know the page's language. The same check applies to the accessible name from `aria-label`, `aria-labelledby` or `title`.
+
+The check runs before the generic list and always wins. `subscribe` and `join` stay on the generic list, because on their own they say what to do and not where the link goes.
 
 ## How to fix it
 
