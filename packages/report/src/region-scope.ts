@@ -19,8 +19,24 @@ export const REGION_SCOPE_MIN_SHARE = 0.8;
 /** ...and on at least this many pages: a finding on one page reads better as that page. */
 export const REGION_SCOPE_MIN_PAGES = 2;
 
-/** The template regions a site repeats across pages; the page content is never one. */
-export const TEMPLATE_REGIONS = ["header", "footer", "navigation", "sidebar"] as const;
+/**
+ * The template regions a site repeats across pages: the page frame, and the blocks that recur the
+ * same on every page that has them (breadcrumbs, pagination and the widget sections the page
+ * classifier names). Never one: the page content, comments, related content and the author
+ * byline, which differ from page to page.
+ */
+export const TEMPLATE_REGIONS = [
+  "header",
+  "footer",
+  "navigation",
+  "sidebar",
+  "breadcrumbs",
+  "pagination",
+  "newsletter_signup",
+  "social_share",
+  "business_info",
+  "account_login",
+] as const;
 export type TemplateRegion = (typeof TEMPLATE_REGIONS)[number];
 
 const REGION_NAME: Record<TemplateRegion, string> = {
@@ -28,6 +44,12 @@ const REGION_NAME: Record<TemplateRegion, string> = {
   footer: "the site footer",
   navigation: "the site navigation",
   sidebar: "the sidebar",
+  breadcrumbs: "the breadcrumbs",
+  pagination: "the pagination",
+  newsletter_signup: "the newsletter signup",
+  social_share: "the social share links",
+  business_info: "the business details",
+  account_login: "the account links",
 };
 
 export function isTemplateRegion(value: unknown): value is TemplateRegion {

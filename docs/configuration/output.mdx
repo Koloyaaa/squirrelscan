@@ -723,13 +723,13 @@ An item that is a resource found on pages, such as a broken link, lists those pa
 
 Items that can say where they sit also carry `regions`: how many pages the item sits on, by section, counting every page, not only the ones listed (`{ "header": 49, "content": 3 }`). A page counts once in each section the item has on it. Rules that look at one page at a time set it on each page's item (`a11y/link-text`, `links/anchor-text`, `links/tel-mailto`, `links/https-downgrade`, `links/invalid-links`, `links/nofollow-internal`), and the report adds them up across pages, building a `sources` row for each listed page; a row from these rules has `sections` and no `links`. `content/stale-copyright` names its region on the check instead, as `details.region` (`"footer"`).
 
-When an item sits in the site header, footer, navigation or a sidebar on at least 80% of the pages that have that region (and on at least 2 pages), the report shows it once for the region; see [findings in a shared page region](/reports#findings-in-a-shared-page-region). The JSON report adds `scope` to that item, and to a check scoped by `details.region`, beside the bounded page list:
+When an item sits in a template region (the site header, footer or navigation, a sidebar, the breadcrumbs, the pagination, or the newsletter signup, social share, business details or account links) on at least 80% of the pages that have that region (and on at least 2 pages), the report shows it once for the region; see [findings in a shared page region](/reports#findings-in-a-shared-page-region). The JSON report adds `scope` to that item, and to a check scoped by `details.region`, beside the bounded page list:
 
 ```json
 "scope": { "region": "header", "pages": 49, "regionPages": 53, "otherPages": 3 }
 ```
 
-`region` is `header`, `footer`, `navigation` or `sidebar`; `pages` is the pages the item sits on in the region; `regionPages` is the audited pages that have the region (from the [page structure](#page-structure) block); `otherPages` is the pages the item is on outside it. The XML report writes the same as `<scope region="header" pages="49" region-pages="53" other-pages="3"/>` inside the item or check. An item with no `scope` keeps its page rows.
+`region` is `header`, `footer`, `navigation`, `sidebar`, `breadcrumbs`, `pagination`, `newsletter_signup`, `social_share`, `business_info` or `account_login`; `pages` is the pages the item sits on in the region; `regionPages` is the audited pages that have the region (from the [page structure](#page-structure) block); `otherPages` is the pages the item is on outside it. The XML report writes the same as `<scope region="header" pages="49" region-pages="53" other-pages="3"/>` inside the item or check. An item with no `scope` keeps its page rows.
 
 ---
 

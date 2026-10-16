@@ -78,6 +78,32 @@ describe("itemRegionScope", () => {
     expect(itemRegionScope(item({ sidebar: 5 }), SITE_STRUCTURE)).toMatchObject({ region: "sidebar", pages: 5, regionPages: 6 });
   });
 
+  // Template regions beyond the page frame: blocks that recur the same on every page that has them.
+  const WIDGETS: [string, string][] = [
+    ["breadcrumbs", "In the breadcrumbs"],
+    ["pagination", "In the pagination"],
+    ["newsletter_signup", "In the newsletter signup"],
+    ["social_share", "In the social share links"],
+    ["business_info", "In the business details"],
+    ["account_login", "In the account links"],
+  ];
+  for (const [region, lead] of WIDGETS) {
+    test(`${region} is a template region, judged against the pages that have it`, () => {
+      const s = structure({ [region]: 14, content: 50 });
+      const scope = itemRegionScope(item({ [region]: 14 }), s);
+      expect(scope).toMatchObject({ region, pages: 14, regionPages: 14 });
+      expect(regionScopeLine(scope!)).toBe(`${lead}, on 14 of 14 pages`);
+      expect(itemRegionScope(item({ [region]: 11 }), s)).toBeUndefined();
+    });
+  }
+
+  test("the page content, comments, related content and the author byline are never regions", () => {
+    const s = structure({ content: 50, comments: 50, related_content: 50, author_byline: 50 });
+    for (const section of ["content", "comments", "related_content", "author_byline"]) {
+      expect(itemRegionScope(item({ [section]: 50 }), s)).toBeUndefined();
+    }
+  });
+
   test("pages outside the region come from the item's total", () => {
     const scope = itemRegionScope(item({ header: 49, content: 3 }, { pageCount: 52 }), SITE_STRUCTURE);
     expect(scope).toEqual({ region: "header", pages: 49, regionPages: 53, otherPages: 3 });
@@ -291,6 +317,44 @@ describe("scoped findings in each format", () => {
     const html = renderHtml(report);
     // HTML: every page is still in the item, behind a closed details element.
     expect(html).toMatch(/<details class="pages-more"><summary>All 50 pages<\/summary>/);
+  });
+
+  test("a link in the breadcrumbs of every page that has them names the breadcrumbs", () => {
+    const sourcePages = pages(0, 14);
+    const report: AuditReport = {
+      baseUrl: SITE,
+      timestamp: "2026-10-16T00:00:00.000Z",
+      totalPages: 53,
+      passed: 0,
+      warnings: 1,
+      failed: 0,
+      structure: structure({ header: 53, breadcrumbs: 14, content: 50 }),
+      ruleResults: {
+        "links/redirect-chains": {
+          meta: { ...LINK_TEXT_META, id: "links/redirect-chains", name: "Redirect Chains", category: "links", scope: "site" },
+          checks: [
+            {
+              name: "links-to-redirect",
+              status: "warn",
+              message: "1 link target(s) point to redirecting URLs",
+              items: [
+                {
+                  id: `${SITE}/docs`,
+                  label: `${SITE}/docs (301) → ${SITE}/docs/ (200), linked in the breadcrumbs`,
+                  sourcePages,
+                  sources: sourcePages.map((p) => ({ page: p, links: 1, sections: { breadcrumbs: 1 } })),
+                  regions: { breadcrumbs: 14 },
+                  meta: { sections: { breadcrumbs: 14 } },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    };
+    const text = renderText(report);
+    expect(text).toContain("In the breadcrumbs, on 14 of 14 pages");
+    expect(count(text, "from: /p")).toBe(0);
   });
 
   test("a check that only reads the footer names it once", () => {
