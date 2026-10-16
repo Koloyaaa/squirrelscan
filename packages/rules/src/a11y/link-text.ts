@@ -1,8 +1,15 @@
 // a11y/link-text - Check for descriptive link text
 // Based on WCAG 2.4.4 Link Purpose (In Context) (Level A)
 
-import { hasUnsafeUrlScheme } from "@squirrelscan/utils";
+import type { LinkSection } from "@squirrelscan/core-contracts";
+import {
+  coerceSchemelessUrl,
+  hasNonCrawlableUrlScheme,
+  hasUnsafeUrlScheme,
+  isCloudflareEmailProtectionUrl,
+} from "@squirrelscan/utils";
 
+import { pageRegionsField } from "../links/link-section-label";
 import { isConventionalLinkLabel } from "../shared/conventional-link-labels";
 import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
 
@@ -176,6 +183,50 @@ function hasAccessibleContent(link: Element): {
   return { hasContent: false, contentType: "empty" };
 }
 
+function noteSection(
+  byText: Map<string, Set<LinkSection | undefined>>,
+  text: string,
+  section: LinkSection | undefined,
+): void {
+  let sections = byText.get(text);
+  if (!sections) byText.set(text, (sections = new Set()));
+  sections.add(section);
+}
+
+/**
+ * Where each anchor sits, from the parse's placement of the page's links (pub#846): the markup
+ * landmarks and the page classifier's answer, as `parsed.links[].section` stores them. The parse
+ * keeps one entry per crawlable anchor in document order, keyed here by resolved URL and text, so
+ * reading every anchor in document order hands each repeat of a link its own entry. An anchor the
+ * parse did not keep, or a parse without sections, has no section.
+ */
+function linkPlacements(ctx: RuleContext): (anchor: Element, href: string) => LinkSection | undefined {
+  const placed = ctx.parsed.links ?? [];
+  if (!placed.some((l) => l.section && l.section !== "unknown")) return () => undefined;
+  const queues = new Map<string, Array<LinkSection | undefined>>();
+  for (const l of placed) {
+    const key = `${l.url}\u0000${l.text}`;
+    const queue = queues.get(key);
+    if (queue) queue.push(l.section);
+    else queues.set(key, [l.section]);
+  }
+  return (anchor, href) => {
+    // The anchors the engine's link extractor leaves out have no entry: reading one would take
+    // the entry of a kept anchor that resolves to the same URL and text.
+    if (!href || href.trim() === "#" || hasNonCrawlableUrlScheme(href)) return undefined;
+    let url: string;
+    try {
+      url = new URL(coerceSchemelessUrl(href.trim()), ctx.page.url).toString();
+    } catch {
+      return undefined;
+    }
+    // Cloudflare's email-protection link is a contact, not a page: never in `parsed.links` (pub#811).
+    if (isCloudflareEmailProtectionUrl(url)) return undefined;
+    const section = queues.get(`${url}\u0000${anchor.textContent?.trim() ?? ""}`)?.shift();
+    return section === "unknown" ? undefined : section;
+  };
+}
+
 export const linkTextRule: Rule = {
   meta: {
     id: "a11y/link-text",
@@ -197,10 +248,15 @@ export const linkTextRule: Rule = {
 
     const links = doc.querySelectorAll("a[href]");
     const genericLinks: string[] = [];
-    const emptyLinks: Array<{ href: string; reason: string }> = [];
+    const emptyLinks: Array<{ href: string; reason: string; section?: LinkSection }> = [];
+    // pub#846: the section each flagged link sits in, per generic text.
+    const genericSections = new Map<string, Set<LinkSection | undefined>>();
+    const sectionOf = linkPlacements(ctx);
 
     for (const link of links) {
       const href = link.getAttribute("href") || "";
+      // Read for every anchor, in document order, so repeats of one link line up with the parse.
+      const section = sectionOf(link, href);
 
       // Skip anchor links and javascript
       if (href.trimStart().startsWith("#") || hasUnsafeUrlScheme(href)) continue;
@@ -213,6 +269,7 @@ export const linkTextRule: Rule = {
         // Still check if it's generic
         if (isGenericLinkText(accessibleName)) {
           genericLinks.push(accessibleName);
+          noteSection(genericSections, accessibleName, section);
         }
         continue;
       }
@@ -224,6 +281,7 @@ export const linkTextRule: Rule = {
         emptyLinks.push({
           href: href.substring(0, 50),
           reason: contentType,
+          section,
         });
         continue;
       }
@@ -232,6 +290,7 @@ export const linkTextRule: Rule = {
       const text = link.textContent?.trim().toLowerCase() || "";
       if (isGenericLinkText(text)) {
         genericLinks.push(text);
+        noteSection(genericSections, text, section);
       }
     }
 
@@ -243,6 +302,7 @@ export const linkTextRule: Rule = {
         items: emptyLinks.map((item) => ({
           id: item.href,
           label: item.reason,
+          ...pageRegionsField([item.section]),
         })),
         details: {
           reasons: [...new Set(emptyLinks.map((e) => e.reason))],
@@ -256,7 +316,10 @@ export const linkTextRule: Rule = {
         name: "link-text-generic",
         status: "warn",
         message: `${genericLinks.length} link(s) with generic text`,
-        items: uniqueGeneric.map((text) => ({ id: text })),
+        items: uniqueGeneric.map((text) => ({
+          id: text,
+          ...pageRegionsField(genericSections.get(text)),
+        })),
       });
     }
 

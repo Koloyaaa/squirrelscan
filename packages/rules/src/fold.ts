@@ -1,12 +1,17 @@
 // Fold over-cap per-rule check arrays into per-issue-class aggregates (#910).
 
-import type { CheckItem, CheckResult } from "@squirrelscan/core-contracts";
+import type {
+  CheckItem,
+  CheckItemSource,
+  CheckResult,
+  LinkSection,
+} from "@squirrelscan/core-contracts";
 import {
   clampDetailsRecord,
   clampItemId,
   clampItemString,
 } from "@squirrelscan/core-contracts/clamp";
-import { alignItemSources } from "@squirrelscan/core-contracts/item-sources";
+import { addRegions, alignItemSources, pageRegions } from "@squirrelscan/core-contracts/item-sources";
 import { PUBLISH_LIMITS, REPORT_LIMITS } from "@squirrelscan/core-contracts/limits";
 import { byteLength } from "@squirrelscan/utils/bytes";
 
@@ -319,23 +324,32 @@ function sampleCheckForPublish(check: CheckResult, limits: PublishSampleLimits):
           ? undefined
           : clampItemString(item.label, REPORT_LIMITS.maxMediumString);
       let sourcePages = item.sourcePages;
+      // pub#846: the pages a clip leaves out are still counted, so a report can say how many.
+      let pageCount = item.pageCount;
       if (sourcePages && sourcePages.length > 0) {
         const deduped = [...new Set(sourcePages)];
         const sliced =
           deduped.length > limits.maxSourcePagesPerItem
             ? deduped.slice(0, limits.maxSourcePagesPerItem)
             : deduped;
+        if (sliced.length < deduped.length && deduped.length > (pageCount ?? 0)) {
+          pageCount = deduped.length;
+        }
         // Reuse the original ref only when dedupe + clip were both no-ops.
         sourcePages = sliced.length === sourcePages.length ? sourcePages : sliced;
       }
       const next =
-        id === item.id && label === item.label && sourcePages === item.sourcePages
+        id === item.id &&
+        label === item.label &&
+        sourcePages === item.sourcePages &&
+        pageCount === item.pageCount
           ? item
           : {
               ...item,
               id,
               ...(label !== undefined ? { label } : {}),
               ...(sourcePages ? { sourcePages } : {}),
+              ...(pageCount !== undefined ? { pageCount } : {}),
             };
       // pub#837: per-source detail goes with the pages the sample kept.
       const aligned = alignItemSources(next);
@@ -679,6 +693,24 @@ export function stampChecksTruncated(check: CheckResult, total: number): CheckRe
 }
 
 /**
+ * An aggregate's item as seen on one of its pages (pub#846): its `regions` are that page's
+ * sections from the item's row for it, not the aggregate's totals, and its `sources` that row
+ * alone. A re-fold then counts each page once. The same item when it carries neither.
+ */
+function itemOnPage(item: CheckItem, page: string): CheckItem {
+  if (!item.regions && !item.sources) return item;
+  const row = item.sources?.find((source) => source.page === page);
+  const next: CheckItem = { ...item };
+  delete next.regions;
+  delete next.sources;
+  if (!row) return next;
+  next.sources = [row];
+  const regions = pageRegions(Object.keys(row.sections ?? {}) as LinkSection[]);
+  if (regions) next.regions = regions;
+  return next;
+}
+
+/**
  * Inverse of {@link foldOverflowChecks}: expand ONE folded aggregate back into
  * per-page checks (#910/#916). A published report arrives already folded, so any
  * consumer that needs per-page granularity — the server smart-audits union, which
@@ -735,7 +767,8 @@ export function unfoldAggregateCheck(check: CheckResult): CheckResult[] {
       message: perPageMessage,
       pageUrl: page,
       pages: undefined,
-      items: pageItems && pageItems.length > 0 ? pageItems : undefined,
+      items:
+        pageItems && pageItems.length > 0 ? pageItems.map((item) => itemOnPage(item, page)) : undefined,
       details: Object.keys(details).length > 0 ? details : undefined,
     };
   });
@@ -875,6 +908,10 @@ function foldGroup(group: CheckResult[], limits: FoldLimits): CheckResult {
   // sourcePages so per-page attribution survives losing per-check pageUrl.
   const itemMap = new Map<string, CheckItem>();
   const sourceSets = new Map<string, Set<string>>();
+  // pub#846: where the item sits on each page it came from, and its pages per section, summed.
+  const placedSources = new Map<string, Map<string, CheckItemSource>>();
+  // Per item, the "page\0section" pairs already added to its `regions`.
+  const countedRegions = new Map<string, Set<string>>();
   // Unique ids dropped at the cap — a repeat occurrence of an already-dropped
   // item (shared CDN asset referenced from many pages) must not recount.
   const droppedIds = new Set<string>();
@@ -888,12 +925,48 @@ function foldGroup(group: CheckResult[], limits: FoldLimits): CheckResult {
           droppedIds.add(item.id);
           continue;
         }
-        itemMap.set(item.id, { ...item });
+        // `regions` is added back below, the same way for the first sighting and the rest.
+        const copy = { ...item };
+        delete copy.regions;
+        itemMap.set(item.id, copy);
         sources = new Set(item.sourcePages ?? []);
         sourceSets.set(item.id, sources);
       } else {
         for (const src of item.sourcePages ?? []) sources.add(src);
       }
+      const merged = itemMap.get(item.id)!;
+      if (typeof item.pageCount === "number" && item.pageCount > (merged.pageCount ?? 0)) {
+        merged.pageCount = item.pageCount;
+      }
+      let placed = placedSources.get(item.id);
+      if (!placed) placedSources.set(item.id, (placed = new Map()));
+      for (const source of item.sources ?? []) if (!placed.has(source.page)) placed.set(source.page, source);
+      if (check.pageUrl && item.regions) {
+        // A per-page item's sections are where it sits on that page. One page counts once per
+        // section, however many of its items share the id: the pairs already counted are kept
+        // apart from the source rows, which an unfolded item brings along.
+        let counted = countedRegions.get(item.id);
+        if (!counted) countedRegions.set(item.id, (counted = new Set()));
+        const fresh = pageRegions(
+          (Object.keys(item.regions) as LinkSection[]).filter(
+            (s) => !counted!.has(`${check.pageUrl}\u0000${s}`),
+          ),
+        );
+        if (fresh) {
+          for (const s of Object.keys(fresh)) counted.add(`${check.pageUrl}\u0000${s}`);
+          const prior = placed.get(check.pageUrl);
+          placed.set(check.pageUrl, {
+            ...prior,
+            page: check.pageUrl,
+            sections: { ...prior?.sections, ...fresh },
+          });
+          merged.regions = addRegions(merged.regions, fresh);
+        }
+      } else {
+        // An aggregate's counts are already per page (re-fold, #916).
+        merged.regions = addRegions(merged.regions, item.regions);
+      }
+      if (!merged.regions) delete merged.regions;
       // Attribute the item to the check's page(s). A per-page check carries
       // `pageUrl`. An already-aggregated check (re-fold path, #916) carries
       // `pages` — but only fall back to it when the item has NO sourcePages of
@@ -909,12 +982,17 @@ function foldGroup(group: CheckResult[], limits: FoldLimits): CheckResult {
   const items = [...itemMap.values()]
     .map((item) => {
       const sources = sourceSets.get(item.id)!;
-      return sources.size > 0
-        ? alignItemSources({
-            ...item,
-            sourcePages: [...sources].sort().slice(0, limits.maxSourcePagesPerItem),
-          })
-        : item;
+      if (sources.size === 0) return item;
+      const placed = placedSources.get(item.id);
+      return alignItemSources({
+        ...item,
+        sourcePages: [...sources].sort().slice(0, limits.maxSourcePagesPerItem),
+        // The true spread when the list is cut (pub#846), so a report can count the pages it omits.
+        ...(sources.size > limits.maxSourcePagesPerItem
+          ? { pageCount: Math.max(sources.size, item.pageCount ?? 0) }
+          : {}),
+        ...(placed && placed.size > 0 ? { sources: [...placed.values()] } : {}),
+      });
     })
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
@@ -936,6 +1014,11 @@ function foldGroup(group: CheckResult[], limits: FoldLimits): CheckResult {
   const details: Record<string, unknown> = { aggregated: true, occurrences };
   // Every constituent shares it: it is part of the group key.
   if (typeof first.details?.foldKey === "string") details.foldKey = first.details.foldKey;
+  // pub#846: a check that only reads one region (a footer copyright year) keeps naming it.
+  const region = first.details?.region;
+  if (typeof region === "string" && group.every((c) => c.details?.region === region)) {
+    details.region = region;
+  }
   if (additional + droppedIds.size > 0) details.additional = additional + droppedIds.size;
   if (pagesTotal > pages.length) details.pagesTruncated = pagesTotal;
 

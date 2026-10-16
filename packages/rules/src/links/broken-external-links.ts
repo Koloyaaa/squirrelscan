@@ -14,6 +14,7 @@ import { isRateLimitStatus } from "@squirrelscan/utils/rate-limit";
 import type { Rule, RuleContext, RuleResult, CheckResult, SiteData } from "../types";
 
 import {
+  regionsField,
   sectionMeta,
   tallyFields,
   tallySource,
@@ -56,6 +57,8 @@ interface ExternalPlacement {
   sections(href: string): SectionCounts | undefined;
   /** Per page of `sourcePages` the audited pages show: its links to `href` and their sections. */
   sources(href: string, sourcePages: readonly string[]): CheckItemSource[] | undefined;
+  /** Audited pages linking it, per section (pub#846), or undefined when none placed it. */
+  regions(href: string): SectionCounts | undefined;
 }
 
 /**
@@ -107,6 +110,10 @@ function externalPlacement(
       const kept = all.filter((source) => listed.has(source.page));
       return kept.length > 0 ? kept : undefined;
     },
+    regions(href) {
+      const regions = fieldsOf(href)?.regions;
+      return regions && Object.keys(regions).length > 0 ? regions : undefined;
+    },
   };
 }
 
@@ -115,12 +122,18 @@ function placementItemFields(
   href: string,
   sourcePages: readonly string[],
   placement: ExternalPlacement
-): { label?: string; meta?: { sections: SectionCounts }; sources?: CheckItemSource[] } {
+): {
+  label?: string;
+  meta?: { sections: SectionCounts };
+  sources?: CheckItemSource[];
+  regions?: SectionCounts;
+} {
   const sections = placement.sections(href);
   const sources = placement.sources(href, sourcePages);
   return {
     ...(sections ? { label: withSection(href, sections), meta: { sections } } : {}),
     ...(sources ? { sources } : {}),
+    ...regionsField(placement.regions(href)),
   };
 }
 
@@ -422,6 +435,7 @@ export const brokenExternalLinksRule: Rule = {
             ),
             sourcePages: l.sourcePages,
             ...(sources ? { sources } : {}),
+            ...regionsField(placement.regions(l.href)),
             meta: { status: l.status, error: l.error, ...sectionMeta(sections) },
           };
         }),
@@ -464,6 +478,7 @@ export const brokenExternalLinksRule: Rule = {
             ),
             sourcePages: l.sourcePages,
             ...(sources ? { sources } : {}),
+            ...regionsField(placement.regions(l.href)),
             meta: { wafProvider: l.wafProvider, ...sectionMeta(sections) },
           };
         }),
@@ -485,6 +500,7 @@ export const brokenExternalLinksRule: Rule = {
             label: withSection(`${l.href} (${l.status ?? "rate limited"})`, sections),
             sourcePages: l.sourcePages,
             ...(sources ? { sources } : {}),
+            ...regionsField(placement.regions(l.href)),
             meta: { status: l.status, rateLimited: true, ...sectionMeta(sections) },
           };
         }),

@@ -15,7 +15,14 @@ import type { PageAnchorSignal } from "./page-anchors";
 
 import { normalizeUrl } from "@squirrelscan/utils";
 
-import { sectionMeta, tallyFields, tallySource, withSection, type SourceTally } from "./link-section-label";
+import {
+  regionsField,
+  sectionMeta,
+  tallyFields,
+  tallySource,
+  withSection,
+  type SourceTally,
+} from "./link-section-label";
 import { buildPageAnchorSignal, decodeFragment, isJudgeableFragment } from "./page-anchors";
 
 interface AnchorGroup {
@@ -248,12 +255,13 @@ export const brokenAnchorsRule: Rule = {
         status: "warn",
         message: `${broken.length} in-page anchor link(s) point at an id that does not exist on the target page`,
         items: broken.map((g) => {
-          const { sourcePages, sources, sections } = tallyFields(g.sources);
+          const { sourcePages, sources, sections, regions } = tallyFields(g.sources);
           return {
             id: g.url,
             label: withSection(`${g.url}${g.skipLink ? " (skip link)" : ""}`, sections),
             sourcePages,
             sources,
+            ...regionsField(regions),
             meta: { skipLink: g.skipLink, ...sectionMeta(sections), linkedFrom: sourcePages.length },
           };
         }),
@@ -273,12 +281,13 @@ export const brokenAnchorsRule: Rule = {
         status: "info",
         message: `${unconfirmed.length} in-page anchor link(s) target a client-rendered page that was not rendered, so the id may be added by JavaScript`,
         items: unconfirmed.map((g) => {
-          const { sourcePages, sources, sections } = tallyFields(g.sources);
+          const { sourcePages, sources, sections, regions } = tallyFields(g.sources);
           return {
             id: g.url,
             label: withSection(g.url, sections),
             sourcePages,
             sources,
+            ...regionsField(regions),
             meta: { ...sectionMeta(sections), linkedFrom: sourcePages.length, rendered: false },
           };
         }),

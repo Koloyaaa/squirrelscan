@@ -45,6 +45,8 @@ describe("links/https-downgrade — link sections", () => {
         id: "http://other.example/x",
         label: "http://other.example/x, linked in the footer",
         meta: { sections: { footer: 1 } },
+        // pub#846: one page per section, for the report's region scope.
+        regions: { footer: 1 },
       },
       { id: "http://other.example/y" },
     ]);
@@ -85,6 +87,7 @@ describe("links/nofollow-internal — link sections", () => {
         id: "/x",
         label: "/x, linked in the navigation",
         meta: { sections: { navigation: 1 } },
+        regions: { navigation: 1 },
       },
     ]);
   });
@@ -130,6 +133,7 @@ describe("links/invalid-links — link sections", () => {
         id: "http://[bad",
         label: "Invalid URL format, linked in the footer",
         meta: { text: "t", error: "Invalid URL format", sections: { footer: 1 } },
+        regions: { footer: 1 },
       },
     ]);
   });

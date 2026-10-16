@@ -132,6 +132,8 @@ describe("links/anchor-text — link sections", () => {
         id: '"Read more"',
         label: '"Read more", linked in the page content and the navigation',
         meta: { sections: { navigation: 1, content: 1 } },
+        // pub#846: one page in each section it sits in, for the report's region scope.
+        regions: { navigation: 1, content: 1 },
       },
     ]);
   });
@@ -147,6 +149,7 @@ describe("links/anchor-text — link sections", () => {
         id: '"click here"',
         label: '"click here", linked in the footer',
         meta: { sections: { footer: 1 } },
+        regions: { footer: 1 },
       },
     ]);
   });

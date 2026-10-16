@@ -99,15 +99,23 @@ export interface CheckItem {
    * longer lists (a publish cap clipped it) is dropped by {@link alignItemSources}.
    */
   sources?: CheckItemSource[];
+  /**
+   * How many pages the item sits on, by the part of the page it sits in there (pub#846):
+   * `{ footer: 49, content: 2 }`. A page counts once in each section the item has on it, and
+   * pages with no known section are not counted. Unlike `sourcePages` it counts every page, so a
+   * report can say "in the site footer, on 49 of 53 pages" from a capped list. A page-scope rule
+   * sets 1 per section on its own page; the report and the fold add them up across pages.
+   */
+  regions?: LinkSectionCounts;
   meta?: Record<string, unknown>;
 }
 
 /** One source page of a {@link CheckItem}, and how the item sits on it (pub#837). */
 export interface CheckItemSource {
   page: string;
-  /** Links on the page that point at the item. */
-  links: number;
-  /** Where on the page those links sit; absent when none had a known section. */
+  /** Links on the page that point at the item; absent when the producer did not count them. */
+  links?: number;
+  /** Where on the page the item sits; absent when no part of it had a known section. */
   sections?: LinkSectionCounts;
 }
 

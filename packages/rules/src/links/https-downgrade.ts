@@ -2,7 +2,13 @@
 
 import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
 
-import { addSection, sectionMeta, withSection, type SectionCounts } from "./link-section-label";
+import {
+  addSection,
+  pageRegionsField,
+  sectionMeta,
+  withSection,
+  type SectionCounts,
+} from "./link-section-label";
 
 export const httpsDowngradeRule: Rule = {
   meta: {
@@ -69,7 +75,13 @@ export const httpsDowngradeRule: Rule = {
           const resolved = resolve(url);
           const sections = resolved ? placed.get(resolved) : undefined;
           return sections
-            ? { id: url, label: withSection(url, sections), meta: sectionMeta(sections) }
+            ? {
+                id: url,
+                label: withSection(url, sections),
+                meta: sectionMeta(sections),
+                // pub#846: the page's sections, so the report can scope a repeated link to one.
+                ...pageRegionsField(sections),
+              }
             : { id: url };
         }),
       });

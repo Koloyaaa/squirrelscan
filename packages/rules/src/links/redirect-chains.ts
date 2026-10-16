@@ -4,7 +4,14 @@ import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
 import { formatRedirectHop, type RedirectChain } from "@squirrelscan/core-contracts";
 
 import { didRedirect, targetKey } from "../shared/redirect-evidence";
-import { sectionMeta, tallyFields, tallySource, withSection, type SourceTally } from "./link-section-label";
+import {
+  regionsField,
+  sectionMeta,
+  tallyFields,
+  tallySource,
+  withSection,
+  type SourceTally,
+} from "./link-section-label";
 
 export const redirectChainsRule: Rule = {
   meta: {
@@ -113,12 +120,13 @@ export const redirectChainsRule: Rule = {
         items: [...linksToRedirect.entries()].map(([target, tally]) => {
           const redirect = redirectTargets.get(target);
           const label = redirect ? redirect.chainLabel : target;
-          const { sourcePages, sources, sections } = tallyFields(tally);
+          const { sourcePages, sources, sections, regions } = tallyFields(tally);
           return {
             id: redirect?.originalUrl ?? target,
             label: withSection(label, sections),
             sourcePages,
             sources,
+            ...regionsField(regions),
             meta: {
               targetUrl: redirect?.finalUrl ?? target,
               chain: redirect?.chain,
