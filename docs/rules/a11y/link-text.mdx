@@ -29,6 +29,10 @@ The whole link text has to be the label. "Sign in to continue" is judged like an
 
 The check runs before the generic list and always wins. `subscribe` and `join` stay on the generic list, because on their own they say what to do and not where the link goes.
 
+### Where the link sits
+
+Each item records the parts of the page its links sit in, as `regions` (one page per section), taken from where the page's landmarks and the [page classifier](/configuration/classifier) placed that link: the header, the footer, the navigation, a sidebar or the page content. A link they could not place adds nothing, and so does a crawl stored before link sections were recorded. The report adds the pages up, so a generic phrase in the header of nearly every page reads once as `In the site header, on 49 of 53 pages` instead of listing every page, and its pages elsewhere are listed under that line. See [findings in a shared page region](/reports#findings-in-a-shared-page-region).
+
 ## How to fix it
 
 ```html
