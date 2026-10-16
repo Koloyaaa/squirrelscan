@@ -13,10 +13,14 @@ import {
 import {
   affectedPagesSuffix,
   hasItemSources,
-  itemSourceList,
+  itemSourceView,
   moreSourcePages,
   sourceRowText,
 } from "../item-sources";
+import { checkPagesScopedAway, checkRegionScope, regionScopeLine } from "../region-scope";
+
+/** "in the site footer, ..." from "In the site footer, ...", to sit inside a sentence. */
+const lowerFirst = (text: string): string => text.charAt(0).toLowerCase() + text.slice(1);
 import { getDocsUrl } from "../docs";
 import { domainAgeYears } from "../site-metadata";
 import { lockedRulesMessage } from "../locked-rules";
@@ -455,7 +459,18 @@ export function renderLlm(report: AuditReport, options?: LlmRenderOptions): stri
       const totalPages = rollup.count;
       const totalLabel = `${totalPages}${rollup.hasMore ? "+" : ""}`;
   
-      if (allPages.size > 0) {
+      // pub#846: a rule whose findings all name their region lists no pages here: each check
+      // and item says where it is.
+      const scopedAway = rule.checks.every((c) =>
+        checkPagesScopedAway(c, affectedPages(c).count, report.structure),
+      );
+      if (allPages.size > 0 && scopedAway) {
+        lines.push(`${indent(2)}Pages (${totalLabel})`);
+        for (const c of rule.checks) {
+          const scope = checkRegionScope(c, affectedPages(c).count, report.structure);
+          if (scope) lines.push(`${indent(2)}${escapeXml(regionScopeLine(scope))}`);
+        }
+      } else if (allPages.size > 0) {
         const sampledPages = sampleAffectedPagesBreadthFirst(Array.from(allPages), baseOrigin);
         const pageList = sampledPages
           .map((p) => escapeXml(compressUrl(p, baseOrigin)))
@@ -504,15 +519,20 @@ export function renderLlm(report: AuditReport, options?: LlmRenderOptions): stri
             }
             if (metaParts.length > 0) itemLine += ` [${metaParts.join(", ")}]`;
           }
-          // pub#837: each page once, with its links and where they sit.
-          const { rows, unlisted } = itemSourceList(item);
-          if (rows.length > 0) {
-            const sources = rows
-              .slice(0, LLM_REPORT.maxItemSourcePages)
-              .map((row) => escapeXml(sourceRowText(compressUrl(row.page, baseOrigin), row.detail)))
-              .join(", ");
-            const hidden = Math.max(0, rows.length - LLM_REPORT.maxItemSourcePages) + unlisted;
-            itemLine += hidden > 0 ? ` (from: ${sources}; ${moreSourcePages(hidden)})` : ` (from: ${sources})`;
+          // pub#837: each page once, with its links and where they sit. pub#846: an item
+          // scoped to a region names it, then the pages it is on outside it.
+          const view = itemSourceView(item, report.structure);
+          const shown = view.rows.slice(0, LLM_REPORT.maxItemSourcePages);
+          const hidden = Math.max(0, view.total - shown.length);
+          const sources = shown
+            .map((row) => escapeXml(sourceRowText(compressUrl(row.page, baseOrigin), row.detail)))
+            .join(", ");
+          const more = hidden > 0 ? `; ${moreSourcePages(hidden)}` : "";
+          if (view.scope) {
+            const where = escapeXml(lowerFirst(regionScopeLine(view.scope)));
+            itemLine += shown.length > 0 ? ` (${where}; also from: ${sources}${more})` : ` (${where})`;
+          } else if (shown.length > 0) {
+            itemLine += ` (from: ${sources}${more})`;
           }
           lines.push(itemLine);
         }

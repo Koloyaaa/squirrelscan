@@ -292,10 +292,24 @@ export {
   affectedPagesSuffix,
   hasItemSources,
   itemSourceList,
+  itemSourceView,
   moreSourcePages,
   sourceRowText,
 } from "./item-sources";
-export type { ItemSourceList, ItemSourceRow } from "./item-sources";
+export type { ItemSourceList, ItemSourceRow, ItemSourceView } from "./item-sources";
+
+// pub#846: a finding in a shared page region names the region instead of listing its pages.
+export {
+  REGION_SCOPE_MIN_PAGES,
+  REGION_SCOPE_MIN_SHARE,
+  TEMPLATE_REGIONS,
+  checkPagesScopedAway,
+  checkRegionScope,
+  itemRegionScope,
+  regionScopeData,
+  regionScopeLine,
+} from "./region-scope";
+export type { RegionScope, TemplateRegion } from "./region-scope";
 
 // Failed/blocked audit notice copy (#792, #935) — single source of truth for
 // the static HTML report's FailureNotice and the dashboard's report-detail notice.

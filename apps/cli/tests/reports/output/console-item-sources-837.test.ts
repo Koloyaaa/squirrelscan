@@ -122,4 +122,27 @@ describe("console broken link sources (pub#837)", () => {
     expect(out).toContain("... +2 more pages");
     expect(out).not.toContain("see full list");
   });
+
+  test("a link in the footer of most pages names the region, not the pages (pub#846)", () => {
+    const sources = Array.from({ length: 12 }, (_, k) => ({
+      page: `${SITE}/p${k}`,
+      links: 1,
+      sections: { footer: 1 },
+    }));
+    const report = brokenLinks(sources);
+    report.ruleResults["links/broken-links"]!.checks[0]!.items![0]!.regions = {
+      footer: 12,
+    };
+    report.structure = {
+      pages: 13,
+      sections: [{ section: "footer", pages: 13, links: 40 }],
+      unknownLinks: 0,
+      totalLinks: 40,
+      chrome: { links: 40, contentLinks: 0, share: 1 },
+      pageTypes: { counts: [], notClassified: 13, byModel: 0, degraded: 0 },
+    } as unknown as NonNullable<AuditReport["structure"]>;
+    const out = capture(report);
+    expect(out).toContain("In the site footer, on 12 of 13 pages");
+    expect(out).not.toContain("from /p0");
+  });
 });

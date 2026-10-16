@@ -9,8 +9,11 @@ import {
   affectedPages,
   affectedPagesSuffix,
   hasItemSources,
-  itemSourceList,
+  checkPagesScopedAway,
+  checkRegionScope,
+  itemSourceView,
   moreSourcePages,
+  regionScopeLine,
   REPORT_SOURCE_PAGES_PREVIEW,
   sourceRowText,
   carriedTag,
@@ -265,8 +268,21 @@ export function generateConsoleReport(
               `   ${statusIcon} ${check.name}: ${check.message}${countStr}${carried}`
             )
           );
-          // Show affected pages (for page-scope rules)
-          if (pageCount > 0) {
+          // pub#846: a check that only reads one shared region names it, and a
+          // check whose findings name their regions leaves its page list out.
+          const affected = affectedPages(check).count;
+          const checkScope = checkRegionScope(
+            check,
+            affected,
+            report.structure
+          );
+          if (checkScope) {
+            log(box.line(`     ${fmt.dim(regionScopeLine(checkScope))}`));
+          } else if (
+            pageCount > 0 &&
+            !checkPagesScopedAway(check, affected, report.structure)
+          ) {
+            // Show affected pages (for page-scope rules)
             const maxPages = 5;
             const pagesToShow = check.pages.slice(0, maxPages);
             for (const page of pagesToShow) {
@@ -290,18 +306,21 @@ export function generateConsoleReport(
                 log(box.line(`       ${fmt.dim(item.snippet)}`));
               }
               // Source pages (site-scope items): each page once, with its
-              // links and where they sit (pub#837).
-              const { rows, unlisted } = itemSourceList(item);
-              for (const row of rows.slice(0, REPORT_SOURCE_PAGES_PREVIEW)) {
+              // links and where they sit (pub#837). An item scoped to a
+              // region names it, then its pages outside it (pub#846).
+              const view = itemSourceView(item, report.structure);
+              if (view.scope) {
+                log(box.line(`       ${fmt.dim(regionScopeLine(view.scope))}`));
+              }
+              const shown = view.rows.slice(0, REPORT_SOURCE_PAGES_PREVIEW);
+              for (const row of shown) {
                 log(
                   box.line(
                     `       ${fmt.dim(`from ${sourceRowText(pathOnly(row.page), row.detail)}`)}`
                   )
                 );
               }
-              const hidden =
-                Math.max(0, rows.length - REPORT_SOURCE_PAGES_PREVIEW) +
-                unlisted;
+              const hidden = Math.max(0, view.total - shown.length);
               if (hidden > 0) {
                 log(
                   box.line(
