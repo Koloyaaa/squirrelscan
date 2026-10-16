@@ -4,7 +4,19 @@ import type { AuditReport, CheckItem } from "../types";
 import { getScoreGrade } from "../scoring";
 import { getGroupName } from "../categories";
 import { groupIssuesByCategory, flattenIssuesBySeverity } from "../grouping";
-import { ruleAffectedPages, ruleAffectedRollup, ruleCarriedPageCount } from "../affected-pages";
+import {
+  affectedPages,
+  ruleAffectedPages,
+  ruleAffectedRollup,
+  ruleCarriedPageCount,
+} from "../affected-pages";
+import {
+  affectedPagesSuffix,
+  hasItemSources,
+  itemSourceList,
+  moreSourcePages,
+  sourceRowText,
+} from "../item-sources";
 import { getDocsUrl } from "../docs";
 import { domainAgeYears } from "../site-metadata";
 import { lockedRulesMessage } from "../locked-rules";
@@ -418,7 +430,14 @@ export function renderLlm(report: AuditReport, options?: LlmRenderOptions): stri
         `${indent(1)}<rule id="${escapeXml(rule.id)}" severity="${rule.severity}" category="${escapeXml(rule.categoryName)}" group="${escapeXml(rule.group)}"${rule.subcategory ? ` subcategory="${escapeXml(rule.subcategory)}"` : ""} status="${ruleStatus}"${carriedAttr} docs="${escapeXml(docsUrl)}">`,
       );
   
-      const messages = rule.checks.map((c) => c.message).filter((m) => m);
+      // pub#837: a check whose items are links says how many pages carry them.
+      const messages = rule.checks
+        .map((c) =>
+          c.message && hasItemSources(c)
+            ? c.message + affectedPagesSuffix(c, affectedPages(c).count)
+            : c.message,
+        )
+        .filter((m) => m);
       if (messages.length > 0) lines.push(`${indent(2)}${escapeXml(messages.join("; "))}`);
       if (rule.mixedProvenanceNote) {
         lines.push(`${indent(2)}${escapeXml(rule.mixedProvenanceNote)}`);
@@ -485,16 +504,15 @@ export function renderLlm(report: AuditReport, options?: LlmRenderOptions): stri
             }
             if (metaParts.length > 0) itemLine += ` [${metaParts.join(", ")}]`;
           }
-          if (item.sourcePages && item.sourcePages.length > 0) {
-            const sourcePages = item.sourcePages.slice(0, LLM_REPORT.maxItemSourcePages);
-            const sources = sourcePages
-              .map((s) => escapeXml(compressUrl(s, baseOrigin)))
+          // pub#837: each page once, with its links and where they sit.
+          const { rows, unlisted } = itemSourceList(item);
+          if (rows.length > 0) {
+            const sources = rows
+              .slice(0, LLM_REPORT.maxItemSourcePages)
+              .map((row) => escapeXml(sourceRowText(compressUrl(row.page, baseOrigin), row.detail)))
               .join(", ");
-            if (sourcePages.length < item.sourcePages.length) {
-              itemLine += ` (from: ${sources}; +${item.sourcePages.length - sourcePages.length} more)`;
-            } else {
-              itemLine += ` (from: ${sources})`;
-            }
+            const hidden = Math.max(0, rows.length - LLM_REPORT.maxItemSourcePages) + unlisted;
+            itemLine += hidden > 0 ? ` (from: ${sources}; ${moreSourcePages(hidden)})` : ` (from: ${sources})`;
           }
           lines.push(itemLine);
         }

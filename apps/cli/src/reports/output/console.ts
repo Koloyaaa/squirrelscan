@@ -6,6 +6,13 @@ import { stripControlCharsPreservingSgr } from "@squirrelscan/core-contracts/con
 import { AUDIT_FAILURE_NEXT_STEP } from "@squirrelscan/core-contracts/failure-reason";
 import { reportFailureReasonCode } from "@squirrelscan/report";
 import {
+  affectedPages,
+  affectedPagesSuffix,
+  hasItemSources,
+  itemSourceList,
+  moreSourcePages,
+  REPORT_SOURCE_PAGES_PREVIEW,
+  sourceRowText,
   carriedTag,
   coverageLine,
   scanScopeLine,
@@ -246,7 +253,12 @@ export function generateConsoleReport(
         for (const check of rule.checks) {
           const statusIcon = icon(check.status as "fail" | "warn");
           const pageCount = check.pages.length;
-          const countStr = pageCount > 1 ? ` (${pageCount} pages)` : "";
+          // pub#837: a check whose items are links counts the pages that carry them.
+          const countStr = hasItemSources(check)
+            ? affectedPagesSuffix(check, affectedPages(check).count)
+            : pageCount > 1
+              ? ` (${pageCount} pages)`
+              : "";
           const carried = fmt.dim(carriedTag(check));
           log(
             box.line(
@@ -277,18 +289,25 @@ export function generateConsoleReport(
               if (item.snippet) {
                 log(box.line(`       ${fmt.dim(item.snippet)}`));
               }
-              // Show source pages if present (for site-scope items)
-              if (item.sourcePages && item.sourcePages.length > 0) {
-                for (const src of item.sourcePages.slice(0, 2)) {
-                  log(box.line(`       ${fmt.dim(`from ${pathOnly(src)}`)}`));
-                }
-                if (item.sourcePages.length > 2) {
-                  log(
-                    box.line(
-                      `       ${fmt.dim(`... +${item.sourcePages.length - 2} more pages`)}`
-                    )
-                  );
-                }
+              // Source pages (site-scope items): each page once, with its
+              // links and where they sit (pub#837).
+              const { rows, unlisted } = itemSourceList(item);
+              for (const row of rows.slice(0, REPORT_SOURCE_PAGES_PREVIEW)) {
+                log(
+                  box.line(
+                    `       ${fmt.dim(`from ${sourceRowText(pathOnly(row.page), row.detail)}`)}`
+                  )
+                );
+              }
+              const hidden =
+                Math.max(0, rows.length - REPORT_SOURCE_PAGES_PREVIEW) +
+                unlisted;
+              if (hidden > 0) {
+                log(
+                  box.line(
+                    `       ${fmt.dim(`... ${moreSourcePages(hidden)}`)}`
+                  )
+                );
               }
             }
             if (check.items.length > maxItems) {

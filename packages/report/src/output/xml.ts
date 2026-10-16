@@ -223,12 +223,33 @@ export function renderXml(report: AuditReport, options?: XmlRenderOptions): stri
             if (item.label && item.label !== item.id) lines.push(`${indent(6)}<label>${escapeXml(item.label)}</label>`);
             if (item.meta) {
               for (const [k, v] of Object.entries(item.meta)) {
-                if (v !== undefined && v !== null) lines.push(`${indent(6)}<${k}>${escapeXml(String(v))}</${k}>`);
+                // An object value (a link's `sections` counts) as JSON, not "[object Object]".
+                if (v !== undefined && v !== null)
+                  lines.push(`${indent(6)}<${k}>${escapeXml(typeof v === "object" ? JSON.stringify(v) : String(v))}</${k}>`);
               }
             }
             if (item.sourcePages && item.sourcePages.length > 0) {
+              // pub#837: each page once, with its links to the item and where they sit.
+              const sources = new Map((item.sources ?? []).map((s) => [s.page, s]));
               lines.push(`${indent(6)}<source-pages>`);
-              for (const src of item.sourcePages) lines.push(`${indent(7)}<page url="${escapeXml(src)}"/>`);
+              for (const src of new Set(item.sourcePages)) {
+                const source = sources.get(src);
+                const url = `url="${escapeXml(src)}"`;
+                const sections = Object.entries(source?.sections ?? {}).filter(([, n]) => (n ?? 0) > 0);
+                if (!source) {
+                  lines.push(`${indent(7)}<page ${url}/>`);
+                  continue;
+                }
+                const attrs = `${url} links="${escapeXml(String(source.links))}"`;
+                if (sections.length === 0) {
+                  lines.push(`${indent(7)}<page ${attrs}/>`);
+                  continue;
+                }
+                lines.push(`${indent(7)}<page ${attrs}>`);
+                for (const [name, n] of sections)
+                  lines.push(`${indent(8)}<section name="${escapeXml(name)}" links="${escapeXml(String(n))}"/>`);
+                lines.push(`${indent(7)}</page>`);
+              }
               lines.push(`${indent(6)}</source-pages>`);
             }
             lines.push(`${indent(5)}</item>`);

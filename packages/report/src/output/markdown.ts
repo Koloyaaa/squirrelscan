@@ -8,6 +8,13 @@ import { refusedFetchLines, reportFailureReasonCode } from "../failure-notice";
 import { getScoreGrade } from "../scoring";
 import { REPORT_SOURCE_PAGES_PREVIEW, REPORT_PAGES_HARD_CAP } from "../constants";
 import { groupIssuesByCategory, flattenIssuesBySeverity } from "../grouping";
+import {
+  affectedPagesSuffix,
+  hasItemSources,
+  itemSourceList,
+  moreSourcePages,
+  sourceRowText,
+} from "../item-sources";
 import { entityMarkdownSection } from "../entities";
 import {
   structureChromeLine,
@@ -523,7 +530,13 @@ export function renderMarkdown(report: AuditReport, options?: MarkdownRenderOpti
       lines.push("|-------|--------|---------|");
       for (const check of rule.checks) {
         const statusIcon = check.status === "fail" ? "X" : "!";
-        const escapedMessage = escapeMarkdownTableCell(check.message + carriedTag(check));
+        // pub#837: a check whose items are links says how many pages carry them.
+        const pagesNote = hasItemSources(check)
+          ? affectedPagesSuffix(check, affectedPages(check).count)
+          : "";
+        const escapedMessage = escapeMarkdownTableCell(
+          check.message + pagesNote + carriedTag(check),
+        );
         lines.push(`| ${check.name} | ${statusIcon} ${check.status} | ${escapedMessage} |`);
       }
       lines.push("");
@@ -587,19 +600,20 @@ export function renderMarkdown(report: AuditReport, options?: MarkdownRenderOpti
               item.id.startsWith("/");
             const display = isUrl ? `[${label}](${escapeMarkdownDestination(item.id)})` : label;
             lines.push(`- ${display}`);
-            if (item.sourcePages && item.sourcePages.length > 0) {
-              for (const src of item.sourcePages.slice(0, REPORT_SOURCE_PAGES_PREVIEW)) {
-                lines.push(`  - from: [${getPathname(src) || "/"}](${src})`);
-              }
-              if (item.sourcePages.length > REPORT_SOURCE_PAGES_PREVIEW) {
-                // The capped preview here is just for per-item context —
-                // the full, interactive list is the unified page block
-                // above, which already covers this item's sourcePages.
-                lines.push(
-                  `  - +${item.sourcePages.length - REPORT_SOURCE_PAGES_PREVIEW} more (see full list above)`,
-                );
-              }
+            // pub#837: each page once, with its links and where they sit. A long list says
+            // how many pages it leaves out; the page block above lists the check's pages,
+            // not this item's, so it is not pointed at.
+            const { rows, unlisted } = itemSourceList(item);
+            for (const row of rows.slice(0, REPORT_SOURCE_PAGES_PREVIEW)) {
+              lines.push(
+                `  - from: ${sourceRowText(
+                  `[${escapeItemLabel(getPathname(row.page) || "/")}](${escapeMarkdownDestination(row.page)})`,
+                  row.detail,
+                )}`,
+              );
             }
+            const hidden = Math.max(0, rows.length - REPORT_SOURCE_PAGES_PREVIEW) + unlisted;
+            if (hidden > 0) lines.push(`  - ${moreSourcePages(hidden)}`);
           }
           lines.push("");
           lines.push("</details>");
