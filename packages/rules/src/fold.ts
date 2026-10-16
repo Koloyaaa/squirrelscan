@@ -6,6 +6,7 @@ import {
   clampItemId,
   clampItemString,
 } from "@squirrelscan/core-contracts/clamp";
+import { alignItemSources } from "@squirrelscan/core-contracts/item-sources";
 import { PUBLISH_LIMITS, REPORT_LIMITS } from "@squirrelscan/core-contracts/limits";
 import { byteLength } from "@squirrelscan/utils/bytes";
 
@@ -327,14 +328,20 @@ function sampleCheckForPublish(check: CheckResult, limits: PublishSampleLimits):
         // Reuse the original ref only when dedupe + clip were both no-ops.
         sourcePages = sliced.length === sourcePages.length ? sourcePages : sliced;
       }
-      if (id === item.id && label === item.label && sourcePages === item.sourcePages) return item;
+      const next =
+        id === item.id && label === item.label && sourcePages === item.sourcePages
+          ? item
+          : {
+              ...item,
+              id,
+              ...(label !== undefined ? { label } : {}),
+              ...(sourcePages ? { sourcePages } : {}),
+            };
+      // pub#837: per-source detail goes with the pages the sample kept.
+      const aligned = alignItemSources(next);
+      if (aligned === item) return item;
       itemsChanged = true;
-      return {
-        ...item,
-        id,
-        ...(label !== undefined ? { label } : {}),
-        ...(sourcePages ? { sourcePages } : {}),
-      };
+      return aligned;
     });
     if (itemsChanged) {
       items = clampedItems;
@@ -903,7 +910,10 @@ function foldGroup(group: CheckResult[], limits: FoldLimits): CheckResult {
     .map((item) => {
       const sources = sourceSets.get(item.id)!;
       return sources.size > 0
-        ? { ...item, sourcePages: [...sources].sort().slice(0, limits.maxSourcePagesPerItem) }
+        ? alignItemSources({
+            ...item,
+            sourcePages: [...sources].sort().slice(0, limits.maxSourcePagesPerItem),
+          })
         : item;
     })
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));

@@ -37,6 +37,9 @@ export * from "./failure-reason";
 
 // #2061: the structured entity map — site-wide JSON-LD graph of one audit.
 export * from "./entity-map";
+
+// pub#837: per-source link detail on check items and how every surface phrases it.
+export * from "./item-sources";
 // #2095: the entity MCP tool contract. Types only here, because `./entity-mcp`
 // re-exports two entity-map schemas that `export *` above already provides and
 // a star would collide. The CONSTANTS — names, descriptions, field specs,
@@ -89,7 +92,23 @@ export interface CheckItem {
    * `PUBLISH_LIMITS.maxSourcePagesPerItem` source pages and records no total.
    */
   pageCount?: number;
+  /**
+   * How the item sits on each page in `sourcePages` (pub#837): link rules say how many of the
+   * page's links point at the item and in which sections. One entry per page. A page
+   * `sourcePages` lists without an entry has nothing more to say, and an entry for a page it no
+   * longer lists (a publish cap clipped it) is dropped by {@link alignItemSources}.
+   */
+  sources?: CheckItemSource[];
   meta?: Record<string, unknown>;
+}
+
+/** One source page of a {@link CheckItem}, and how the item sits on it (pub#837). */
+export interface CheckItemSource {
+  page: string;
+  /** Links on the page that point at the item. */
+  links: number;
+  /** Where on the page those links sit; absent when none had a known section. */
+  sections?: LinkSectionCounts;
 }
 
 export type CheckStatus = "pass" | "warn" | "fail" | "info" | "skipped";

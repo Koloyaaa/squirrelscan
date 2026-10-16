@@ -1,28 +1,12 @@
-// Where on its source pages a link sat, for finding labels (#2307).
+// Where on its source pages a link sat, for finding labels (#2307) and per-source rows (pub#837).
 
-import type { LinkSection, LinkSectionCounts } from "@squirrelscan/core-contracts";
-
-/**
- * How an item reads: "in the footer", "in the page content", "in the pagination", ... The first
- * six come from page markup; the rest are section purposes the page classifier names where the
- * markup says nothing.
- */
-const PHRASE: Record<Exclude<LinkSection, "unknown">, string> = {
-  header: "the header",
-  footer: "the footer",
-  navigation: "the navigation",
-  sidebar: "the sidebar",
-  comments: "the comments",
-  content: "the page content",
-  pagination: "the pagination",
-  breadcrumbs: "the breadcrumbs",
-  related_content: "a related-content block",
-  business_info: "the business details",
-  social_share: "the social sharing links",
-  account_login: "the account and login links",
-  author_byline: "the author byline",
-  newsletter_signup: "the newsletter signup",
-};
+import {
+  LINK_SECTION_PHRASE as PHRASE,
+  linkSectionPhrase,
+  type CheckItemSource,
+  type LinkSection,
+  type LinkSectionCounts,
+} from "@squirrelscan/core-contracts";
 
 export type SectionCounts = LinkSectionCounts;
 
@@ -32,25 +16,47 @@ export function countSection(counts: SectionCounts, section: LinkSection | undef
   counts[section] = (counts[section] ?? 0) + 1;
 }
 
-/** "the footer and the page content", most links first; "" when no section is known. */
-function sectionList(counts: SectionCounts): string {
-  const names = (Object.keys(counts) as (keyof SectionCounts)[])
-    .sort((a, b) => (counts[b] ?? 0) - (counts[a] ?? 0) || a.localeCompare(b))
-    .map((section) => PHRASE[section]);
-  if (names.length === 0) return "";
-  if (names.length <= 2) return names.join(" and ");
-  return `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`;
+/** Per source page of one target, in the order the pages were met: its links there and their sections. */
+export type SourceTally = Map<string, { links: number; sections: SectionCounts }>;
+
+/** Count `links` links (one by default) from `page`; unknown and missing sections add links and no section. */
+export function tallySource(
+  tally: SourceTally,
+  page: string,
+  section: LinkSection | undefined,
+  links = 1
+): void {
+  let entry = tally.get(page);
+  if (!entry) tally.set(page, (entry = { links: 0, sections: {} }));
+  entry.links += links;
+  if (section && section !== "unknown") entry.sections[section] = (entry.sections[section] ?? 0) + links;
 }
 
-/** "in the footer" / "in the footer and the page content"; "" when no section is known. */
-export function sectionPhrase(counts: SectionCounts): string {
-  const list = sectionList(counts);
-  return list ? `in ${list}` : "";
+/**
+ * An item's `sourcePages` (each page once), `sources` (its links and sections there) and the
+ * sections of all of them together, from a target's tally.
+ */
+export function tallyFields(tally: SourceTally): {
+  sourcePages: string[];
+  sources: CheckItemSource[];
+  sections: SectionCounts;
+} {
+  const sections: SectionCounts = {};
+  const sources: CheckItemSource[] = [];
+  for (const [page, entry] of tally) {
+    mergeSections(sections, entry.sections);
+    sources.push({
+      page,
+      links: entry.links,
+      ...(Object.keys(entry.sections).length > 0 ? { sections: entry.sections } : {}),
+    });
+  }
+  return { sourcePages: [...tally.keys()], sources, sections };
 }
 
 /** "label, linked in the footer": the label with where its links sit; the label alone when no section is known. */
 export function withSection(label: string, counts: SectionCounts | undefined): string {
-  const phrase = counts ? sectionPhrase(counts) : "";
+  const phrase = counts ? linkSectionPhrase(counts) : "";
   return phrase ? `${label}, linked ${phrase}` : label;
 }
 
