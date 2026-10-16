@@ -222,10 +222,10 @@ const PAGE_TYPE_NOUN: Record<string, [singular: string, plural: string]> = {
   blog_post: ["blog post", "blog posts"],
   about: ["about page", "about pages"],
   contact: ["contact page", "contact pages"],
-  docs: ["docs page", "docs pages"],
+  docs: ["documentation page", "documentation pages"],
   legal: ["legal page", "legal pages"],
   pricing: ["pricing page", "pricing pages"],
-  listing_index: ["index page", "index pages"],
+  listing_index: ["listing page", "listing pages"],
   other: ["other page", "other pages"],
 };
 

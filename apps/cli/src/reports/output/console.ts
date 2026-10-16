@@ -10,7 +10,7 @@ import {
   affectedPagesSuffix,
   hasItemSources,
   checkPagesScopedAway,
-  checkRegionScope,
+  checkScopeLine,
   itemLabel,
   itemSourceView,
   moreSourcePages,
@@ -272,13 +272,10 @@ export function generateConsoleReport(
           // pub#846: a check that only reads one shared region names it, and a
           // check whose findings name their regions leaves its page list out.
           const affected = affectedPages(check).count;
-          const checkScope = checkRegionScope(
-            check,
-            affected,
-            report.structure
-          );
+          // pub#857: and so does a check on every page of one page type.
+          const checkScope = checkScopeLine(check, affected, report.structure);
           if (checkScope) {
-            log(box.line(`     ${fmt.dim(regionScopeLine(checkScope))}`));
+            log(box.line(`     ${fmt.dim(checkScope)}`));
           } else if (
             pageCount > 0 &&
             !checkPagesScopedAway(check, affected, report.structure)

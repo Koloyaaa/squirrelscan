@@ -13,6 +13,12 @@ import { seedRedirect } from "../coverage";
 import { notCheckedLine, notCheckedRules } from "../not-checked";
 import { pageTypePhrase, structureAttr, structureSectionName } from "../structure";
 import { checkRegionScope, itemLabel, itemRegionScope, type RegionScope } from "../region-scope";
+import { checkPageTypeScope, type PageTypeScope } from "../page-type-scope";
+
+/** `<scope page-type="docs" pages="9" type-pages="11"/>` (pub#857). */
+function pageTypeScopeElement(scope: PageTypeScope): string {
+  return `<scope page-type="${escapeXml(scope.pageType)}" pages="${scope.pages}" type-pages="${scope.typePages}"/>`;
+}
 
 /** `<scope region="footer" pages="49" region-pages="53" other-pages="0"/>` (pub#846). */
 function scopeElement(scope: RegionScope): string {
@@ -216,6 +222,11 @@ export function renderXml(report: AuditReport, options?: XmlRenderOptions): stri
         // pub#846: a check that only reads one shared region names it, beside its page list.
         const checkScope = checkRegionScope(check, pages.count, report.structure);
         if (checkScope) lines.push(`${indent(4)}${scopeElement(checkScope)}`);
+        else {
+          // pub#857: a check on every page of one page type names the type, beside its page list.
+          const typeScope = checkPageTypeScope(check, pages.count, report.structure);
+          if (typeScope) lines.push(`${indent(4)}${pageTypeScopeElement(typeScope)}`);
+        }
         if (pages.sample.length > 0) {
           lines.push(
             `${indent(4)}<affected-pages count="${pages.count}" examples="${pages.sample.length}" has-more="${pages.hasMore}">`,

@@ -20,7 +20,7 @@ import {
 } from "../item-sources";
 import {
   checkPagesScopedAway,
-  checkRegionScope,
+  checkScopeLine,
   itemLabel,
   itemRegionScope,
   regionScopeLine,
@@ -1021,7 +1021,8 @@ function IssuesByGroup({
                             // set); `count` is the authoritative affected-page total.
                             const ap = affectedPages(check);
                             // pub#846: a check that only reads one shared region names it.
-                            const checkScope = checkRegionScope(check, ap.count, structure);
+                            // pub#857: and a check on every page of one page type.
+                            const checkScope = checkScopeLine(check, ap.count, structure);
                             // Items already covered by the unified PagesList above
                             // (pure page-URL ids with no sourcePages) are dropped
                             // from the items block so the same URL isn't listed
@@ -1062,7 +1063,7 @@ function IssuesByGroup({
                                   )}
                                   {checkScope && (
                                     <div className="region-scope">
-                                      {regionScopeLine(checkScope)}
+                                      {checkScope}
                                     </div>
                                   )}
                                   {ap.sample.length > 0 && (

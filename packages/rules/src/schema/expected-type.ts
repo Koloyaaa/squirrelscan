@@ -254,8 +254,11 @@ export const expectedTypeSchemaRule: Rule = {
     // The confidence lives in `details`, not the message: reports group findings by
     // message, and a per-page confidence in it would split one finding per page type
     // into one group per confidence value.
+    // `pageTypeSource` says the label is the classifier model's, so a report may count the
+    // check's pages against `structure.pageTypes` and say "on all 9 documentation pages" (pub#857).
     const details = {
       pageType: pageType.label,
+      pageTypeSource: "model",
       confidence: Number(pageType.confidence.toFixed(2)),
       expected: family.wanted,
       declared: [...declared.all.values()],

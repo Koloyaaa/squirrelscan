@@ -17,7 +17,7 @@ import {
 } from "../item-sources";
 import {
   checkPagesScopedAway,
-  checkRegionScope,
+  checkScopeLine,
   itemLabel,
   regionScopeLine,
 } from "../region-scope";
@@ -560,9 +560,10 @@ export function renderMarkdown(report: AuditReport, options?: MarkdownRenderOpti
         const ap = affectedPages(check);
         // pub#846: a check that sits in one shared region names it instead of listing its
         // pages, and so does a check whose findings are scoped to regions.
-        const checkScope = checkRegionScope(check, ap.count, report.structure);
+        // pub#857: and so does a check on every page of one page type.
+        const checkScope = checkScopeLine(check, ap.count, report.structure);
         if (checkScope) {
-          lines.push(`**${check.name}:** ${regionScopeLine(checkScope)}`);
+          lines.push(`**${check.name}:** ${checkScope}`);
           lines.push("");
         } else if (
           ap.sample.length > 0 &&
