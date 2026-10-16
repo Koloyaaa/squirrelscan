@@ -9,7 +9,14 @@ import {
 import { isCloudflareEmailProtectionUrl, normalizeUrl } from "@squirrelscan/utils";
 import { isRateLimitStatus } from "@squirrelscan/utils/rate-limit";
 
-import { sectionMeta, tallyFields, tallySource, withSection, type SourceTally } from "./link-section-label";
+import {
+  regionsField,
+  sectionMeta,
+  tallyFields,
+  tallySource,
+  withSection,
+  type SourceTally,
+} from "./link-section-label";
 
 export const brokenLinksRule: Rule = {
   meta: {
@@ -219,12 +226,13 @@ export const brokenLinksRule: Rule = {
         status: "fail",
         message: `${brokenLinks.length} broken internal link(s) (4xx/5xx)`,
         items: brokenLinks.map((b) => {
-          const { sourcePages, sources, sections } = tallyFields(b.sources);
+          const { sourcePages, sources, sections, regions } = tallyFields(b.sources);
           return {
             id: b.url,
             label: withSection(`${b.url} (${b.statusCode})`, sections),
             sourcePages,
             sources,
+            ...regionsField(regions),
             meta: {
               statusCode: b.statusCode,
               ...sectionMeta(sections),
@@ -270,12 +278,13 @@ export const brokenLinksRule: Rule = {
         status: "info",
         message: `${refusedLinks.length} internal link(s) ${why} - status unverifiable`,
         items: refusedLinks.map((b) => {
-          const { sourcePages, sources } = tallyFields(b.sources);
+          const { sourcePages, sources, regions } = tallyFields(b.sources);
           return {
             id: b.url,
             label: `${b.url} (${b.statusCode})`,
             sourcePages,
             sources,
+            ...regionsField(regions),
             meta: b.wafChallenge
               ? { statusCode: b.statusCode, wafChallenge: true }
               : { statusCode: b.statusCode, probed: true },
@@ -290,12 +299,13 @@ export const brokenLinksRule: Rule = {
         status: "info",
         message: `${rateLimitedLinks.length} internal link(s) rate-limited - status unverifiable`,
         items: rateLimitedLinks.map((b) => {
-          const { sourcePages, sources } = tallyFields(b.sources);
+          const { sourcePages, sources, regions } = tallyFields(b.sources);
           return {
             id: b.url,
             label: `${b.url} (${b.statusCode})`,
             sourcePages,
             sources,
+            ...regionsField(regions),
             meta: { statusCode: b.statusCode, rateLimited: true },
           };
         }),

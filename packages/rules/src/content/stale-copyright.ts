@@ -125,6 +125,9 @@ export const staleCopyrightRule: Rule = {
             message: `Footer copyright year is ${year}, behind the current year ${currentYear}`,
             value: year,
             expected: currentYear,
+            // pub#846: the year is read from the site footer only, so the report can say "in the
+            // site footer, on 49 of 53 pages" instead of listing every page.
+            details: { region: "footer" },
           }
         : {
             name: "footer-copyright-year",

@@ -3,6 +3,7 @@
 import {
   LINK_SECTION_PHRASE as PHRASE,
   linkSectionPhrase,
+  pageRegions,
   type CheckItemSource,
   type LinkSection,
   type LinkSectionCounts,
@@ -33,25 +34,51 @@ export function tallySource(
 }
 
 /**
- * An item's `sourcePages` (each page once), `sources` (its links and sections there) and the
- * sections of all of them together, from a target's tally.
+ * An item's `sourcePages` (each page once), `sources` (its links and sections there), the sections
+ * of all of them together (links per section), and `regions` (pages per section, pub#846), from a
+ * target's tally.
  */
 export function tallyFields(tally: SourceTally): {
   sourcePages: string[];
   sources: CheckItemSource[];
   sections: SectionCounts;
+  regions: SectionCounts;
 } {
   const sections: SectionCounts = {};
+  const regions: SectionCounts = {};
   const sources: CheckItemSource[] = [];
   for (const [page, entry] of tally) {
     mergeSections(sections, entry.sections);
+    for (const section of Object.keys(entry.sections) as (keyof SectionCounts)[]) {
+      regions[section] = (regions[section] ?? 0) + 1;
+    }
     sources.push({
       page,
       links: entry.links,
       ...(Object.keys(entry.sections).length > 0 ? { sections: entry.sections } : {}),
     });
   }
-  return { sourcePages: [...tally.keys()], sources, sections };
+  return { sourcePages: [...tally.keys()], sources, sections, regions };
+}
+
+/** `{ regions }` for an item, or nothing when no page placed it in a section (pub#846). */
+export function regionsField(regions: SectionCounts | undefined): { regions?: SectionCounts } {
+  return regions && Object.keys(regions).length > 0 ? { regions } : {};
+}
+
+/**
+ * `{ regions }` for a page-scope rule's item from where its elements sit on this page: one page
+ * in each section (pub#846). Nothing when no element had a known section.
+ */
+export function pageRegionsField(
+  sections: SectionCounts | Iterable<LinkSection | undefined> | undefined
+): { regions?: SectionCounts } {
+  if (!sections) return {};
+  const keys =
+    Symbol.iterator in sections
+      ? (sections as Iterable<LinkSection | undefined>)
+      : (Object.keys(sections) as LinkSection[]);
+  return regionsField(pageRegions(keys));
 }
 
 /** "label, linked in the footer": the label with where its links sit; the label alone when no section is known. */

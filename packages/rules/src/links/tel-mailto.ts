@@ -7,6 +7,7 @@ import { MAX_CONTACT_LINKS, makeLinkSectionResolver } from "@squirrelscan/parser
 import {
   addSection,
   countSection,
+  pageRegionsField,
   sectionMeta,
   withSection,
   type SectionCounts,
@@ -181,8 +182,14 @@ export const telMailtoRule: Rule = {
         countSection(own, markupSectionOf(anchor).section);
         if (Object.keys(own).length > 0) sections = own;
       }
+      // pub#846: `regions` lets the report scope a contact link repeated in the footer to it.
       return sections
-        ? { ...item, label: withSection(item.label ?? item.id, sections), meta: sectionMeta(sections) }
+        ? {
+            ...item,
+            label: withSection(item.label ?? item.id, sections),
+            meta: sectionMeta(sections),
+            ...pageRegionsField(sections),
+          }
         : item;
     };
 

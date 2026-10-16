@@ -2,7 +2,13 @@
 
 import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
 
-import { countSection, sectionMeta, withSection, type SectionCounts } from "./link-section-label";
+import {
+  countSection,
+  pageRegionsField,
+  sectionMeta,
+  withSection,
+  type SectionCounts,
+} from "./link-section-label";
 
 export const invalidLinksRule: Rule = {
   meta: {
@@ -41,6 +47,8 @@ export const invalidLinksRule: Rule = {
             id: link.url,
             label: withSection(link.error ?? "Invalid format", sections),
             meta: { text: link.text, error: link.error, ...sectionMeta(sections) },
+            // pub#846: the page's sections, so the report can scope a repeated link to one.
+            ...pageRegionsField(sections),
           };
         }),
       });

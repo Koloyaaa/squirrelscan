@@ -2,7 +2,13 @@
 
 import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
 
-import { addSection, sectionMeta, withSection, type SectionCounts } from "./link-section-label";
+import {
+  addSection,
+  pageRegionsField,
+  sectionMeta,
+  withSection,
+  type SectionCounts,
+} from "./link-section-label";
 
 export const nofollowInternalRule: Rule = {
   meta: {
@@ -70,7 +76,13 @@ export const nofollowInternalRule: Rule = {
         items: nofollowInternal.map((url) => {
           const sections = placed.get(resolvedOf.get(url) ?? "");
           return sections
-            ? { id: url, label: withSection(url, sections), meta: sectionMeta(sections) }
+            ? {
+                id: url,
+                label: withSection(url, sections),
+                meta: sectionMeta(sections),
+                // pub#846: the page's sections, so the report can scope a repeated link to one.
+                ...pageRegionsField(sections),
+              }
             : { id: url };
         }),
       });

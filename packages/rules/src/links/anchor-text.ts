@@ -7,6 +7,7 @@ import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
 import {
   addSection,
   mergeSections,
+  pageRegionsField,
   sectionMeta,
   withSection,
   type SectionCounts,
@@ -187,6 +188,8 @@ export const anchorTextRule: Rule = {
           ...(a.sections
             ? { label: withSection(a.href, a.sections), meta: sectionMeta(a.sections) }
             : {}),
+          // pub#846: the sections it sits in on this page, so the report can scope it to one.
+          ...pageRegionsField(a.sections),
         })),
       });
     }
@@ -203,6 +206,7 @@ export const anchorTextRule: Rule = {
             id: text,
             label: withSection(text, sections),
             ...(sections ? { meta: sectionMeta(sections) } : {}),
+            ...pageRegionsField(sections),
           };
         }),
       });

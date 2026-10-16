@@ -26,10 +26,18 @@ export const LINK_SECTION_PHRASE: Record<Exclude<LinkSection, "unknown">, string
   newsletter_signup: "the newsletter signup",
 };
 
+/**
+ * A placed section name this version knows: not `unknown`, and an own key of the phrase table, so
+ * a stored key such as "constructor" never reads as a section.
+ */
+export function isLinkSection(value: unknown): value is Exclude<LinkSection, "unknown"> {
+  return typeof value === "string" && Object.hasOwn(LINK_SECTION_PHRASE, value);
+}
+
 /** "the footer and the page content", most links first; "" when no section is known. */
 export function linkSectionList(counts: LinkSectionCounts): string {
   const names = (Object.keys(counts) as (keyof LinkSectionCounts)[])
-    .filter((section) => LINK_SECTION_PHRASE[section] !== undefined && (counts[section] ?? 0) > 0)
+    .filter((section) => isLinkSection(section) && (counts[section] ?? 0) > 0)
     .sort((a, b) => (counts[b] ?? 0) - (counts[a] ?? 0) || a.localeCompare(b))
     .map((section) => LINK_SECTION_PHRASE[section]);
   if (names.length === 0) return "";
@@ -49,10 +57,43 @@ export function linkSectionPhrase(counts: LinkSectionCounts): string {
  */
 export function itemSourceDetail(source: CheckItemSource): string {
   const parts: string[] = [];
-  if (source.links > 1) parts.push(`${source.links} links`);
+  if (source.links !== undefined && source.links > 1) parts.push(`${source.links} links`);
   const where = source.sections ? linkSectionPhrase(source.sections) : "";
   if (where) parts.push(where);
   return parts.join(", ");
+}
+
+/**
+ * The sections an item has on one page, as page counts: each known section once (pub#846). What a
+ * page-scope rule sets as its item's `regions`; undefined when no section is known.
+ */
+export function pageRegions(
+  sections: Iterable<LinkSection | undefined>
+): LinkSectionCounts | undefined {
+  const regions: LinkSectionCounts = {};
+  let any = false;
+  for (const section of sections) {
+    if (!section || !isLinkSection(section)) continue;
+    regions[section] = 1;
+    any = true;
+  }
+  return any ? regions : undefined;
+}
+
+/** `into` plus `from`, section by section; `into` when `from` adds nothing. A new object otherwise. */
+export function addRegions(
+  into: LinkSectionCounts | undefined,
+  from: LinkSectionCounts | undefined
+): LinkSectionCounts | undefined {
+  if (!from) return into;
+  const out: LinkSectionCounts = { ...into };
+  for (const key of Object.keys(from) as (keyof LinkSectionCounts)[]) {
+    const n = from[key];
+    if (typeof n !== "number" || !Number.isFinite(n) || n <= 0) continue;
+    if (!isLinkSection(key)) continue;
+    out[key] = (out[key] ?? 0) + n;
+  }
+  return Object.keys(out).length > 0 ? out : into;
 }
 
 /**
