@@ -3,11 +3,14 @@
 
 import { hasUnsafeUrlScheme } from "@squirrelscan/utils";
 
+import { isConventionalLinkLabel } from "../shared/conventional-link-labels";
 import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
 
 // Generic link text that doesn't describe the destination
-// Expanded list based on Lighthouse and common patterns
-const GENERIC_LINK_TEXT = [
+// Expanded list based on Lighthouse and common patterns. Conventional account and
+// site-utility labels ("sign in", "sign up", "log in", "register", "terms", "privacy")
+// name their destination and are NOT here: see shared/conventional-link-labels.ts (pub#839).
+export const GENERIC_LINK_TEXT = [
   // Original
   "click here",
   "here",
@@ -30,15 +33,10 @@ const GENERIC_LINK_TEXT = [
   "get",
   "start",
   "begin",
-  // Sign up/account related
-  "sign up",
-  "signup",
-  "register",
+  // Calls to action that name nothing. Account actions (sign in, sign up, log in,
+  // register) are conventional labels, not generic text, and are exempt instead (pub#839).
   "subscribe",
   "join",
-  "login",
-  "log in",
-  "sign in",
   // Navigation
   "next",
   "previous",
@@ -70,6 +68,23 @@ const GENERIC_LINK_TEXT = [
   "discover",
   "explore",
 ];
+
+/**
+ * True when the label is generic text that does not describe its destination. A
+ * conventional account or site-utility label is never generic, and that check runs first,
+ * so it wins over the list whatever the list holds (pub#839).
+ */
+export function isGenericLinkText(
+  label: string,
+  genericPhrases: readonly string[] = GENERIC_LINK_TEXT,
+): boolean {
+  if (isConventionalLinkLabel(label)) return false;
+  const normalized = label
+    .toLowerCase()
+    .replace(/[.,!?;:'"]+/g, "")
+    .trim();
+  return genericPhrases.includes(normalized);
+}
 
 /**
  * Get accessible name from an element
@@ -196,11 +211,7 @@ export const linkTextRule: Rule = {
       // If has accessible name via ARIA, skip further checks
       if (accessibleName) {
         // Still check if it's generic
-        const normalizedName = accessibleName
-          .toLowerCase()
-          .replace(/[.,!?;:'"]+/g, "")
-          .trim();
-        if (GENERIC_LINK_TEXT.includes(normalizedName)) {
+        if (isGenericLinkText(accessibleName)) {
           genericLinks.push(accessibleName);
         }
         continue;
@@ -219,8 +230,7 @@ export const linkTextRule: Rule = {
 
       // Has content - check if it's generic
       const text = link.textContent?.trim().toLowerCase() || "";
-      const normalizedText = text.replace(/[.,!?;:'"]+/g, "").trim();
-      if (GENERIC_LINK_TEXT.includes(normalizedText)) {
+      if (isGenericLinkText(text)) {
         genericLinks.push(text);
       }
     }
