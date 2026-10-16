@@ -131,7 +131,7 @@ describe("console report detail (#2307)", () => {
 
   test("not checked notices are plain list items without the lead-in", () => {
     expect(lines).toContain(
-      `  - Broken External Links. ${NOT_CHECKED}. Turn external link checks on to check them: in the CLI pass --external-links, or run a Surface or Full audit, without --offline; in the cloud they are a website setting.`
+      `  - Broken External Links. ${NOT_CHECKED}. Turn external link checks on to check them: in the CLI pass --external-links (or drop --no-external-links, --offline, or external_links.enabled = false); in the cloud they are a website setting.`
     );
     expect(lines.join("\n")).not.toContain("Not checked:");
   });

@@ -340,7 +340,7 @@ describe("links/broken-external-links — link sections (#2307)", () => {
     );
 
     expect(check(checks, "waf-blocked-external-links")!.items![0]!.label).toBe(
-      "https://wall.example/ (Cloudflare), linked in the navigation",
+      "https://wall.example/ (unverified: Cloudflare), linked in the navigation",
     );
     expect(check(checks, "rate-limited-external-links")!.items![0]!.label).toBe(
       "https://slow.example/ (429), linked in the sidebar",
