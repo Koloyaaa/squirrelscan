@@ -50,10 +50,16 @@ Fix the source, not just the page. The report lists which pages carry each link,
 | | |
 |---|---|
 | **Rule ID** | `links/broken-anchors` |
-| **Category** | [Links](/rules/links) |
+| **Category** | [Reliability](/rules/reliability) |
 | **Scope** | Site-wide |
 | **Severity** | warning |
 | **Weight** | 4/10 |
+
+## Category and score
+
+A link to `#section` whose target is gone lands the reader at the top of the page instead of where the link promised. That is the same failure as a broken link, so this rule is in the [Reliability](/rules/reliability) category even though its id keeps the `links/` prefix, like [links/broken-links](/rules/links/broken-links) and [links/broken-external-links](/rules/links/broken-external-links). The report badges it Reliability, and its findings count toward the Performance score group, the group Reliability rolls up into, instead of SEO. The overall health score weights every rule the same wherever it sits.
+
+Because the id is unchanged, nothing you configured breaks. `links/*` in `enable` or `disable` still selects this rule, `links/broken-anchors` still names it in `rule_options`, and the docs URL is the same. `reliability/*` does not select it, because a pattern matches on the id, but `--rule-include reliability` and `--rule-exclude reliability` do name it. A JSON or published report written before this change still shows the rule under Links. An audit stored on your machine is rendered with the current categories when you run `squirrel report`, so it now shows the rule under Reliability.
 
 ## Enable / disable
 
@@ -86,7 +92,7 @@ enable = ["links/broken-anchors"]
 - [a11y/skip-link](/rules/a11y/skip-link): whether the page offers a way past repeated navigation at all.
 - [links/redirect-chains](/rules/links/redirect-chains): internal links that resolve, but through a redirect.
 
-Links findings ship in every audit next to the SEO, performance and agent experience rules. See [Fix SEO issues with AI](https://squirrelscan.com/learn/fix-seo-issues-with-ai) for how an agent works through a report.
+Reliability findings ship in every audit next to the SEO, performance and agent experience rules. See [Fix SEO issues with AI](https://squirrelscan.com/learn/fix-seo-issues-with-ai) for how an agent works through a report.
 
 ## References
 
@@ -95,13 +101,13 @@ Links findings ship in every audit next to the SEO, performance and agent experi
 
 ## Check your website
 
-Run `squirrel audit https://example.com` and open the Links section of the report. Each broken anchor is listed with the link and the pages that carry it. Signed-out local audits need no account and cost nothing. Signed-in audits spend credits.
+Run `squirrel audit https://example.com` and open the Reliability section of the report. Each broken anchor is listed with the link and the pages that carry it. Signed-out local audits need no account and cost nothing. Signed-in audits spend credits.
 
 <CardGroup cols={2}>
   <Card title="Install squirrel" icon="terminal" href="/quickstart">
     One command to install, one to run your first audit.
   </Card>
   <Card title="See a sample report" icon="file-text" href="https://squirrelscan.com/reports/squirrelscan-sample">
-    What the Links section looks like on a real website.
+    What the Reliability section looks like on a real website.
   </Card>
 </CardGroup>

@@ -80,7 +80,10 @@ export const brokenAnchorsRule: Rule = {
       "Detects links to #fragments whose target id does not exist on the page they point at",
     solution:
       "A link to #id jumps to the element with that id. When the element is renamed or removed, the link still loads and the reader lands at the top of the page instead of the section. Update the link to the id that exists now, or add the id to the target element. Skip links need a target too: give <main> or the content container the id the skip link points at.",
-    category: "links",
+    // A link whose fragment names an id that is gone lands the visitor somewhere that does not
+    // have what the link promised: the same failure as a broken link, so Reliability (pub#843).
+    // The id keeps its `links/` prefix; only the category, and so the badge and score group, moves.
+    category: "reliability",
     scope: "site",
     severity: "warning",
     weight: 4,

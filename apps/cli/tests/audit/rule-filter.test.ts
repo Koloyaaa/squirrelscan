@@ -241,14 +241,20 @@ describe("filterResolvesToZeroCategories", () => {
 // pub#836: `links/broken-links` and `links/broken-external-links` are Reliability rules that
 // keep their `links/` ids. A pattern matches on the id, so "the reliability category" has to
 // name them explicitly or `--rule-include reliability` would run without them.
-describe("rules whose category is not their id prefix (pub#836)", () => {
-  const MOVED = ["links/broken-links", "links/broken-external-links"];
+describe("rules whose category is not their id prefix (pub#836, pub#843)", () => {
+  const MOVED = [
+    "links/broken-links",
+    "links/broken-external-links",
+    "links/broken-anchors",
+  ];
 
   test("a bare reliability token also names the broken link rules", () => {
     const r = parseRuleFilters("reliability", "reliability");
     expect(r.errors).toEqual([]);
-    expect(r.enable).toEqual(["reliability/*", ...MOVED]);
-    expect(r.disable).toEqual(["reliability/*", ...MOVED]);
+    for (const patterns of [r.enable, r.disable]) {
+      expect(patterns[0]).toBe("reliability/*");
+      expect([...patterns.slice(1)].sort()).toEqual([...MOVED].sort());
+    }
   });
 
   test("a bare links token is still links/* (the ids are Links ids)", () => {
@@ -273,6 +279,15 @@ describe("rules whose category is not their id prefix (pub#836)", () => {
     ).toBe(false);
   });
 
+  test("including only the broken anchors rule keeps reliability in the run", () => {
+    expect(
+      isCategoryExcluded("reliability", {
+        enable: ["links/broken-anchors"],
+        disable: [],
+      })
+    ).toBe(false);
+  });
+
   test("reliability is excluded when the include names only other links rules", () => {
     expect(
       isCategoryExcluded("reliability", {
@@ -282,7 +297,7 @@ describe("rules whose category is not their id prefix (pub#836)", () => {
     ).toBe(true);
   });
 
-  test("excluding both broken link rules, or links/*, excludes the reliability rules they name", () => {
+  test("excluding every broken link rule, or links/*, excludes the reliability rules they name", () => {
     expect(
       isCategoryExcluded("reliability", { enable: [], disable: ["links/*"] })
     ).toBe(true);
