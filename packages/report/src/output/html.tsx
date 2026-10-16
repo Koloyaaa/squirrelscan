@@ -18,7 +18,13 @@ import {
   moreSourcePages,
   type ItemSourceRow,
 } from "../item-sources";
-import { checkPagesScopedAway, checkRegionScope, regionScopeLine } from "../region-scope";
+import {
+  checkPagesScopedAway,
+  checkRegionScope,
+  itemLabel,
+  itemRegionScope,
+  regionScopeLine,
+} from "../region-scope";
 import { getScoreGrade, getScoreColor, getGroupColor } from "../scoring";
 import {
   REPORT_COLLAPSE_THRESHOLD,
@@ -1080,7 +1086,13 @@ function IssuesByGroup({
                                       </summary>
                                       <div className="pages-list">
                                         {visibleItems!.map((item, i) => {
-                                          const label = item.label ?? item.id;
+                                          // pub#846: a scoped item's label drops the section
+                                          // phrase its region line says.
+                                          const ownLabel = itemLabel(
+                                            item,
+                                            itemRegionScope(item, structure),
+                                          );
+                                          const label = ownLabel ?? item.id;
                                           const isUrl = isPageUrl(item.id);
                                           return (
                                             <div key={i} style={{ marginBottom: "0.5rem" }}>
@@ -1091,7 +1103,7 @@ function IssuesByGroup({
                                                   rel="noopener noreferrer"
                                                 >
                                                   {getPathname(item.id) || "/"}
-                                                  {item.label ? ` — ${item.label}` : ""}
+                                                  {ownLabel ? ` — ${ownLabel}` : ""}
                                                 </a>
                                               ) : (
                                                 <span>{label}</span>

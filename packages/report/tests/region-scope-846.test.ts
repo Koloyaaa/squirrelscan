@@ -357,6 +357,33 @@ describe("scoped findings in each format", () => {
     expect(count(text, "from: /p")).toBe(0);
   });
 
+  test("a scoped item drops its section phrase in every format; an unscoped one keeps it", () => {
+    const report = footerLinkReport();
+    const items = report.ruleResults["links/broken-links"]!.checks[0]!.items!;
+    items[0]!.meta = { statusCode: 404, sections: { footer: 50 } };
+    items.push({
+      id: `${SITE}/lost`,
+      label: `${SITE}/lost (404), linked in the page content`,
+      sourcePages: [page(0)],
+      sources: [{ page: page(0), links: 1, sections: { content: 1 } }],
+      regions: { content: 1 },
+      meta: { statusCode: 404, sections: { content: 1 } },
+    });
+    const text = renderText(report);
+    expect(text).toContain(`-> ${SITE}/gone (404)\n`);
+    expect(text).not.toContain(`${SITE}/gone (404), linked in the footer`);
+    expect(text).toContain(`-> ${SITE}/lost (404), linked in the page content`);
+    const md = renderMarkdown(report);
+    expect(md).toContain(`- [${SITE}/gone (404)](${SITE}/gone)`);
+    expect(md).toContain("linked in the page content");
+    expect(renderHtml(report)).not.toContain("gone (404), linked in the footer");
+    expect(renderLlm(report)).not.toContain("gone (404), linked in the footer");
+    expect(renderXml(report)).toContain(`<label>${SITE}/gone (404)</label>`);
+    const json = JSON.parse(renderJson(report));
+    expect(json.issues[0].checks[0].items[0].label).toBe(`${SITE}/gone (404)`);
+    expect(json.issues[0].checks[0].items[1].label).toBe(`${SITE}/lost (404), linked in the page content`);
+  });
+
   test("a check that only reads the footer names it once", () => {
     const text = renderText(copyrightReport());
     expect(text).toContain("In the site footer, on 50 of 52 pages");

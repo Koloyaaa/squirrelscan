@@ -12,7 +12,7 @@ import { entityPageTotal, stableIdPercent } from "../entities";
 import { seedRedirect } from "../coverage";
 import { notCheckedLine, notCheckedRules } from "../not-checked";
 import { pageTypePhrase, structureAttr, structureSectionName } from "../structure";
-import { checkRegionScope, itemRegionScope, type RegionScope } from "../region-scope";
+import { checkRegionScope, itemLabel, itemRegionScope, type RegionScope } from "../region-scope";
 
 /** `<scope region="footer" pages="49" region-pages="53" other-pages="0"/>` (pub#846). */
 function scopeElement(scope: RegionScope): string {
@@ -229,9 +229,11 @@ export function renderXml(report: AuditReport, options?: XmlRenderOptions): stri
           lines.push(`${indent(4)}<items count="${check.items.length}">`);
           for (const item of check.items) {
             lines.push(`${indent(5)}<item id="${escapeXml(item.id)}">`);
-            if (item.label && item.label !== item.id) lines.push(`${indent(6)}<label>${escapeXml(item.label)}</label>`);
-            // pub#846: the region the item is shown in, beside its bounded page list.
+            // pub#846: the region the item is shown in, beside its bounded page list; a scoped
+            // item's label drops the section phrase the region says.
             const scope = itemRegionScope(item, report.structure);
+            const label = itemLabel(item, scope);
+            if (label && label !== item.id) lines.push(`${indent(6)}<label>${escapeXml(label)}</label>`);
             if (scope) lines.push(`${indent(6)}${scopeElement(scope)}`);
             if (item.meta) {
               for (const [k, v] of Object.entries(item.meta)) {

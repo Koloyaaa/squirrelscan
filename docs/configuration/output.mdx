@@ -729,7 +729,7 @@ When an item sits in a template region (the site header, footer or navigation, a
 "scope": { "region": "header", "pages": 49, "regionPages": 53, "otherPages": 3 }
 ```
 
-`region` is `header`, `footer`, `navigation`, `sidebar`, `breadcrumbs`, `pagination`, `newsletter_signup`, `social_share`, `business_info` or `account_login`; `pages` is the pages the item sits on in the region; `regionPages` is the audited pages that have the region (from the [page structure](#page-structure) block); `otherPages` is the pages the item is on outside it. The XML report writes the same as `<scope region="header" pages="49" region-pages="53" other-pages="3"/>` inside the item or check. An item with no `scope` keeps its page rows.
+`region` is `header`, `footer`, `navigation`, `sidebar`, `breadcrumbs`, `pagination`, `newsletter_signup`, `social_share`, `business_info` or `account_login`; `pages` is the pages the item sits on in the region; `regionPages` is the audited pages that have the region (from the [page structure](#page-structure) block); `otherPages` is the pages the item is on outside it. The XML report writes the same as `<scope region="header" pages="49" region-pages="53" other-pages="3"/>` inside the item or check. An item with a `scope` has the section phrase taken off its `label` (`https://example.com/old (404)`, not `https://example.com/old (404), linked in the footer`), in every format, as the region says where it is; `meta.sections` still carries the counts. An item with no `scope` keeps its page rows and its label.
 
 ---
 

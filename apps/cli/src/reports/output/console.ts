@@ -11,6 +11,7 @@ import {
   hasItemSources,
   checkPagesScopedAway,
   checkRegionScope,
+  itemLabel,
   itemSourceView,
   moreSourcePages,
   regionScopeLine,
@@ -299,16 +300,17 @@ export function generateConsoleReport(
             const maxItems = 5;
             const itemsToShow = check.items.slice(0, maxItems);
             for (const item of itemsToShow) {
-              const label = item.label ?? item.id;
+              // Source pages (site-scope items): each page once, with its
+              // links and where they sit (pub#837). An item scoped to a
+              // region names it, then its pages outside it, and its label
+              // drops the section phrase the region says (pub#846).
+              const view = itemSourceView(item, report.structure);
+              const label = itemLabel(item, view.scope) ?? item.id;
               log(box.line(`     ${fmt.dim(`→ ${label}`)}`));
               // Show HTML snippet if present
               if (item.snippet) {
                 log(box.line(`       ${fmt.dim(item.snippet)}`));
               }
-              // Source pages (site-scope items): each page once, with its
-              // links and where they sit (pub#837). An item scoped to a
-              // region names it, then its pages outside it (pub#846).
-              const view = itemSourceView(item, report.structure);
               if (view.scope) {
                 log(box.line(`       ${fmt.dim(regionScopeLine(view.scope))}`));
               }

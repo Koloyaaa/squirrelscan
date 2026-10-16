@@ -10,6 +10,7 @@ import { groupIssuesByCategory, flattenIssuesBySeverity } from "../grouping";
 import { affectedPages } from "../affected-pages";
 import {
   checkRegionScope,
+  itemLabel,
   itemRegionScope,
   regionScopeData,
   type RegionScope,
@@ -366,7 +367,16 @@ function buildSlimReport(report: AuditReport, version: string): SlimJsonReport {
             ...(checkScope ? { scope: regionScopeData(checkScope) } : {}),
             items: check.items?.map((item) => {
               const scope = itemRegionScope(item, report.structure);
-              return scope ? { ...item, scope: regionScopeData(scope) } : item;
+              if (!scope) return item;
+              // The label drops the section phrase `scope` now carries; `meta.sections` keeps it.
+              const label = itemLabel(item, scope);
+              const scoped: CheckItem & { scope?: RegionScope } = {
+                ...item,
+                scope: regionScopeData(scope),
+              };
+              if (label === undefined) delete scoped.label;
+              else scoped.label = label;
+              return scoped;
             }),
             details: check.details,
             ...(check.value ? { legacyValue: check.value } : {}),
