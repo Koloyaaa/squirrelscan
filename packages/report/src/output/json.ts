@@ -8,6 +8,12 @@ import { getScoreGrade } from "../scoring";
 import { getGroupName } from "../categories";
 import { groupIssuesByCategory, flattenIssuesBySeverity } from "../grouping";
 import { affectedPages } from "../affected-pages";
+import {
+  checkRegionScope,
+  itemRegionScope,
+  regionScopeData,
+  type RegionScope,
+} from "../region-scope";
 import { techIconUrl } from "../technologies";
 import { domainAgeYears, siteProfileRows } from "../site-metadata";
 import { editorSummaryView } from "../editor-summary";
@@ -141,7 +147,10 @@ interface SlimJsonReport {
       affectedPages: string[];
       affectedPagesCount: number;
       affectedPagesHasMore: boolean;
-      items?: CheckItem[];
+      /** The shared region a check that only reads one is shown in (pub#846). */
+      scope?: RegionScope;
+      /** Each item may carry the region it is shown in, `scope` (pub#846). */
+      items?: Array<CheckItem & { scope?: RegionScope }>;
       details?: Record<string, unknown>;
       legacyValue?: string;
     }>;
@@ -345,6 +354,8 @@ function buildSlimReport(report: AuditReport, version: string): SlimJsonReport {
         checks: rule.checks.map((check) => {
           // #1023 R-F: affectedPages is a labeled sample; count is authoritative.
           const ap = affectedPages(check);
+          // pub#846: the region a check or item is shown in, beside the bounded page lists.
+          const checkScope = checkRegionScope(check, ap.count, report.structure);
           return {
             name: check.name,
             status: check.status as "fail" | "warn",
@@ -352,7 +363,11 @@ function buildSlimReport(report: AuditReport, version: string): SlimJsonReport {
             affectedPages: ap.sample,
             affectedPagesCount: ap.count,
             affectedPagesHasMore: ap.hasMore,
-            items: check.items,
+            ...(checkScope ? { scope: regionScopeData(checkScope) } : {}),
+            items: check.items?.map((item) => {
+              const scope = itemRegionScope(item, report.structure);
+              return scope ? { ...item, scope: regionScopeData(scope) } : item;
+            }),
             details: check.details,
             ...(check.value ? { legacyValue: check.value } : {}),
             // Smart audits (#110): provenance for findings carried across audits.

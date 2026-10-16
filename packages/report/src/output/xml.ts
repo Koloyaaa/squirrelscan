@@ -12,6 +12,12 @@ import { entityPageTotal, stableIdPercent } from "../entities";
 import { seedRedirect } from "../coverage";
 import { notCheckedLine, notCheckedRules } from "../not-checked";
 import { pageTypePhrase, structureAttr, structureSectionName } from "../structure";
+import { checkRegionScope, itemRegionScope, type RegionScope } from "../region-scope";
+
+/** `<scope region="footer" pages="49" region-pages="53" other-pages="0"/>` (pub#846). */
+function scopeElement(scope: RegionScope): string {
+  return `<scope region="${scope.region}" pages="${scope.pages}" region-pages="${scope.regionPages}" other-pages="${scope.otherPages}"/>`;
+}
 
 export interface XmlRenderOptions {
   version?: string;
@@ -207,6 +213,9 @@ export function renderXml(report: AuditReport, options?: XmlRenderOptions): stri
         // #1023 R-F: count is the authoritative total; the listed pages are a
         // labeled sample (examples) when has-more.
         const pages = affectedPages(check);
+        // pub#846: a check that only reads one shared region names it, beside its page list.
+        const checkScope = checkRegionScope(check, pages.count, report.structure);
+        if (checkScope) lines.push(`${indent(4)}${scopeElement(checkScope)}`);
         if (pages.sample.length > 0) {
           lines.push(
             `${indent(4)}<affected-pages count="${pages.count}" examples="${pages.sample.length}" has-more="${pages.hasMore}">`,
@@ -221,6 +230,9 @@ export function renderXml(report: AuditReport, options?: XmlRenderOptions): stri
           for (const item of check.items) {
             lines.push(`${indent(5)}<item id="${escapeXml(item.id)}">`);
             if (item.label && item.label !== item.id) lines.push(`${indent(6)}<label>${escapeXml(item.label)}</label>`);
+            // pub#846: the region the item is shown in, beside its bounded page list.
+            const scope = itemRegionScope(item, report.structure);
+            if (scope) lines.push(`${indent(6)}${scopeElement(scope)}`);
             if (item.meta) {
               for (const [k, v] of Object.entries(item.meta)) {
                 // An object value (a link's `sections` counts) as JSON, not "[object Object]".

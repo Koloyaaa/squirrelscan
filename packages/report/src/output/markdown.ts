@@ -11,10 +11,11 @@ import { groupIssuesByCategory, flattenIssuesBySeverity } from "../grouping";
 import {
   affectedPagesSuffix,
   hasItemSources,
-  itemSourceList,
+  itemSourceView,
   moreSourcePages,
   sourceRowText,
 } from "../item-sources";
+import { checkPagesScopedAway, checkRegionScope, regionScopeLine } from "../region-scope";
 import { entityMarkdownSection } from "../entities";
 import {
   structureChromeLine,
@@ -552,7 +553,16 @@ export function renderMarkdown(report: AuditReport, options?: MarkdownRenderOpti
         // #1023 R-F: count is the AUTHORITATIVE affected-page total (from the
         // shared accessor), the listed pages are a labeled example subset.
         const ap = affectedPages(check);
-        if (ap.sample.length > 0) {
+        // pub#846: a check that sits in one shared region names it instead of listing its
+        // pages, and so does a check whose findings are scoped to regions.
+        const checkScope = checkRegionScope(check, ap.count, report.structure);
+        if (checkScope) {
+          lines.push(`**${check.name}:** ${regionScopeLine(checkScope)}`);
+          lines.push("");
+        } else if (
+          ap.sample.length > 0 &&
+          !checkPagesScopedAway(check, ap.count, report.structure)
+        ) {
           const materialized =
             ap.sample.length > REPORT_PAGES_HARD_CAP
               ? ap.sample.slice(0, REPORT_PAGES_HARD_CAP)
@@ -602,9 +612,12 @@ export function renderMarkdown(report: AuditReport, options?: MarkdownRenderOpti
             lines.push(`- ${display}`);
             // pub#837: each page once, with its links and where they sit. A long list says
             // how many pages it leaves out; the page block above lists the check's pages,
-            // not this item's, so it is not pointed at.
-            const { rows, unlisted } = itemSourceList(item);
-            for (const row of rows.slice(0, REPORT_SOURCE_PAGES_PREVIEW)) {
+            // not this item's, so it is not pointed at. pub#846: an item scoped to a region
+            // names it, and lists only the pages it is on outside it.
+            const view = itemSourceView(item, report.structure);
+            if (view.scope) lines.push(`  - ${regionScopeLine(view.scope)}`);
+            const shown = view.rows.slice(0, REPORT_SOURCE_PAGES_PREVIEW);
+            for (const row of shown) {
               lines.push(
                 `  - from: ${sourceRowText(
                   `[${escapeItemLabel(getPathname(row.page) || "/")}](${escapeMarkdownDestination(row.page)})`,
@@ -612,7 +625,7 @@ export function renderMarkdown(report: AuditReport, options?: MarkdownRenderOpti
                 )}`,
               );
             }
-            const hidden = Math.max(0, rows.length - REPORT_SOURCE_PAGES_PREVIEW) + unlisted;
+            const hidden = Math.max(0, view.total - shown.length);
             if (hidden > 0) lines.push(`  - ${moreSourcePages(hidden)}`);
           }
           lines.push("");

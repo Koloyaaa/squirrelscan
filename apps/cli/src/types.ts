@@ -192,6 +192,7 @@ import type {
   CacheStats as _CST,
   CategoryScore as _CS,
   CheckItemSource,
+  LinkSectionCounts,
   DomainStats as _DST,
   EditorSummary as _ES,
   EntityMap as _EM,
@@ -225,6 +226,7 @@ export interface CheckItem {
   sourcePages?: string[]; // Pages where this item appears (for site-scope rules)
   pageCount?: number; // Pages it was found on when sourcePages lists fewer (published reports)
   sources?: CheckItemSource[]; // Per source page: links to the item and their sections (pub#837)
+  regions?: LinkSectionCounts; // Pages it sits on, per page section (pub#846)
   meta?: Record<string, unknown>; // Rule-specific metadata (e.g., { status: 404, density: 3.2 })
 }
 

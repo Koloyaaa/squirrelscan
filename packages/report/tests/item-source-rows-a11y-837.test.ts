@@ -113,7 +113,7 @@ describe("a11y item source rows (pub#837)", () => {
     expect(renderLlm(PUBLISHED)).toContain("; +35 more pages)");
     const html = renderHtml(PUBLISHED);
     expect(html).toMatch(/<summary>\+7 more pages<\/summary>/);
-    expect(html).toContain("+30 more pages not listed in this report");
+    expect(html).toContain("+30 more pages not listed here");
     expect(count(html, `href="${page(0)}"`)).toBeLessThanOrEqual(2); // check page list + item row
   });
 });

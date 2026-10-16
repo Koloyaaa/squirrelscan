@@ -11,10 +11,11 @@ import { groupIssuesByCategory, flattenIssuesBySeverity } from "../grouping";
 import { affectedPages, itemsNotListed, itemsNotListedLine } from "../affected-pages";
 import {
   affectedPagesSuffix,
-  itemSourceList,
+  itemSourceView,
   moreSourcePages,
   sourceRowText,
 } from "../item-sources";
+import { checkPagesScopedAway, checkRegionScope, regionScopeLine } from "../region-scope";
 import {
   ENTITY_CONSOLE_LIMIT,
   ENTITY_EMPTY_MESSAGE,
@@ -396,7 +397,12 @@ export function renderText(report: AuditReport, options?: TextRenderOptions): st
         const icon = check.status === "fail" ? "X" : "!";
         write(`    [${icon}] ${check.name}: ${check.message}${countStr}${carriedTag(check)}`);
 
-        if (sample.length > 0) {
+        // pub#846: a check that sits in one shared region names it instead of listing its pages,
+        // and so does a check whose findings are scoped to regions: they carry their own pages.
+        const checkScope = checkRegionScope(check, count, report.structure);
+        if (checkScope) {
+          write(`        ${regionScopeLine(checkScope)}`);
+        } else if (sample.length > 0 && !checkPagesScopedAway(check, count, report.structure)) {
           for (const page of sample) write(`        -> ${pathOnly(page)}`);
           if (hasMore) write(`        ... and ${count - sample.length} more`);
         }
@@ -410,12 +416,15 @@ export function renderText(report: AuditReport, options?: TextRenderOptions): st
             write(`        -> ${label}`);
             if (item.snippet) write(`           ${item.snippet}`);
             // pub#837: each page once, with its links and where they sit; a long list says how
-            // many pages it leaves out.
-            const { rows, unlisted } = itemSourceList(item);
-            for (const row of rows.slice(0, REPORT_SOURCE_PAGES_PREVIEW)) {
+            // many pages it leaves out. pub#846: an item scoped to a region names it, and lists
+            // only the pages it is on outside it.
+            const view = itemSourceView(item, report.structure);
+            if (view.scope) write(`            ${regionScopeLine(view.scope)}`);
+            const shown = view.rows.slice(0, REPORT_SOURCE_PAGES_PREVIEW);
+            for (const row of shown) {
               write(`            from: ${sourceRowText(pathOnly(row.page), row.detail)}`);
             }
-            const hidden = Math.max(0, rows.length - REPORT_SOURCE_PAGES_PREVIEW) + unlisted;
+            const hidden = Math.max(0, view.total - shown.length);
             if (hidden > 0) write(`            ${moreSourcePages(hidden)}`);
           }
           if (left > 0) write(`        ... and ${left.toLocaleString("en-US")} more items not listed`);

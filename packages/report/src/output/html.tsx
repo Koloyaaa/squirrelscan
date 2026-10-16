@@ -10,14 +10,15 @@ import {
   PiUsersThree,
 } from "react-icons/pi";
 
-import type { CheckItem, ReportBranding } from "@squirrelscan/core-contracts";
+import type { CheckItem, ReportBranding, ReportStructure } from "@squirrelscan/core-contracts";
 import type { AuditReport } from "../types";
 import {
   affectedPagesSuffix,
-  itemSourceList,
+  itemSourceView,
   moreSourcePages,
   type ItemSourceRow,
 } from "../item-sources";
+import { checkPagesScopedAway, checkRegionScope, regionScopeLine } from "../region-scope";
 import { getScoreGrade, getScoreColor, getGroupColor } from "../scoring";
 import {
   REPORT_COLLAPSE_THRESHOLD,
@@ -252,6 +253,9 @@ a.group-circle:hover { border-color: oklch(0.52 0.12 145 / 0.5); }
 .carried-tag { font-size: 0.6rem; margin-left: 0.4rem; vertical-align: middle; }
 .carried-note { font-size: 0.8rem; color: ${THEME.colors.mutedForeground}; margin: 0.15rem 0 0.5rem; }
 .carried-note-mixed { color: ${THEME.colors.primary}; }
+
+/* pub#846: a finding in a shared region names the region instead of listing its pages. */
+.region-scope { font-size: 0.85rem; font-weight: 600; margin: 0.15rem 0 0.25rem; }
 
 details { margin: 0.5rem 0; }
 details > summary { cursor: pointer; color: ${THEME.colors.primary}; font-size: 0.875rem; }
@@ -748,9 +752,12 @@ function PagesList({
   pages,
   carriedPages,
   count,
+  collapsed,
 }: {
   pages: string[];
   carriedPages?: string[];
+  /** Start closed whatever the count: the check's findings name their region (pub#846). */
+  collapsed?: boolean;
   /**
    * #1023 R-F: authoritative affected-page total. `pages` is a labeled sample
    * (already sampled for publish + hard-capped here); `count` (≥ pages.length)
@@ -780,7 +787,7 @@ function PagesList({
     </a>
   );
   return (
-    <details open={total <= REPORT_COLLAPSE_THRESHOLD}>
+    <details open={!collapsed && total <= REPORT_COLLAPSE_THRESHOLD}>
       <summary>
         {total} page{total > 1 ? "s" : ""} affected
       </summary>
@@ -823,13 +830,14 @@ function PagesList({
  * rather than in the check's page list, which lists the check's pages, not this item's. Rows past
  * the hard cap, and pages a published report does not list, are counted, never dropped silently.
  */
-function ItemSources({ item }: { item: CheckItem }) {
-  const { rows, unlisted } = itemSourceList(item);
-  if (rows.length === 0 && unlisted === 0) return null;
-  const materialized = rows.slice(0, REPORT_PAGES_HARD_CAP);
-  const shown = materialized.slice(0, REPORT_SOURCE_PAGES_PREVIEW);
-  const rest = materialized.slice(REPORT_SOURCE_PAGES_PREVIEW);
-  const notShown = rows.length - materialized.length + unlisted;
+function ItemSources({
+  item,
+  structure,
+}: {
+  item: CheckItem;
+  structure: ReportStructure | undefined;
+}) {
+  const view = itemSourceView(item, structure);
   const renderRow = (row: ItemSourceRow, j: number) => (
     <div key={j}>
       from:{" "}
@@ -839,6 +847,30 @@ function ItemSources({ item }: { item: CheckItem }) {
       {row.detail ? ` (${row.detail})` : ""}
     </div>
   );
+  if (view.scope) {
+    // pub#846: one line for the region; every listed page stays in the item, collapsed.
+    const all = view.all.slice(0, REPORT_PAGES_HARD_CAP);
+    const total = Math.max(view.scope.pages + view.scope.otherPages, view.all.length);
+    return (
+      <div style={{ paddingLeft: "1rem", fontSize: "0.8rem" }}>
+        <div className="region-scope">{regionScopeLine(view.scope)}</div>
+        {all.length > 0 && (
+          <details className="pages-more">
+            <summary>
+              {all.length < total ? `${all.length} of ${total} pages` : `All ${all.length} pages`}
+            </summary>
+            {all.map(renderRow)}
+          </details>
+        )}
+      </div>
+    );
+  }
+  const { rows } = view;
+  if (rows.length === 0 && view.total === 0) return null;
+  const materialized = rows.slice(0, REPORT_PAGES_HARD_CAP);
+  const shown = materialized.slice(0, REPORT_SOURCE_PAGES_PREVIEW);
+  const rest = materialized.slice(REPORT_SOURCE_PAGES_PREVIEW);
+  const notShown = Math.max(0, view.total - materialized.length);
   return (
     <div style={{ paddingLeft: "1rem", fontSize: "0.8rem" }}>
       {shown.map(renderRow)}
@@ -848,7 +880,7 @@ function ItemSources({ item }: { item: CheckItem }) {
           {rest.map((row, j) => renderRow(row, REPORT_SOURCE_PAGES_PREVIEW + j))}
         </details>
       )}
-      {notShown > 0 && <div>{moreSourcePages(notShown)} not listed in this report</div>}
+      {notShown > 0 && <div>{moreSourcePages(notShown)} not listed here</div>}
     </div>
   );
 }
@@ -859,7 +891,13 @@ function ItemSources({ item }: { item: CheckItem }) {
 // are stamped on each group's FIRST rule in this order — the jump lands on the
 // highest-severity issue in that group, which is what a reader wants anyway.
 // No group or category headings — each rule carries its parent group as a label.
-function IssuesByGroup({ categories }: { categories: GroupedCategory[] }) {
+function IssuesByGroup({
+  categories,
+  structure,
+}: {
+  categories: GroupedCategory[];
+  structure: ReportStructure | undefined;
+}) {
   if (categories.length === 0) return null;
   const issues = flattenIssuesBySeverity(categories);
   const anchoredGroups = new Set<string>();
@@ -976,6 +1014,8 @@ function IssuesByGroup({ categories }: { categories: GroupedCategory[] }) {
                             // #1023 R-F: `sample` is that union (a labeled example
                             // set); `count` is the authoritative affected-page total.
                             const ap = affectedPages(check);
+                            // pub#846: a check that only reads one shared region names it.
+                            const checkScope = checkRegionScope(check, ap.count, structure);
                             // Items already covered by the unified PagesList above
                             // (pure page-URL ids with no sourcePages) are dropped
                             // from the items block so the same URL isn't listed
@@ -1014,11 +1054,17 @@ function IssuesByGroup({ categories }: { categories: GroupedCategory[] }) {
                                   {(carriedLabel || partialCarried) && (
                                     <div className="carried-note">{carriedLabel ?? partialCarried}</div>
                                   )}
+                                  {checkScope && (
+                                    <div className="region-scope">
+                                      {regionScopeLine(checkScope)}
+                                    </div>
+                                  )}
                                   {ap.sample.length > 0 && (
                                     <PagesList
                                       pages={ap.sample}
                                       count={ap.count}
                                       carriedPages={check.carriedPages}
+                                      collapsed={checkPagesScopedAway(check, ap.count, structure)}
                                     />
                                   )}
                                   {hasVisibleItems && (
@@ -1050,7 +1096,7 @@ function IssuesByGroup({ categories }: { categories: GroupedCategory[] }) {
                                               ) : (
                                                 <span>{label}</span>
                                               )}
-                                              <ItemSources item={item} />
+                                              <ItemSources item={item} structure={structure} />
                                             </div>
                                           );
                                         })}
@@ -1573,7 +1619,7 @@ function ReportPage({
           <DomainStatsSection report={report} />
           <TechnologiesSection report={report} />
           {hasIssues ? (
-            <IssuesByGroup categories={categoryIssues} />
+            <IssuesByGroup categories={categoryIssues} structure={report.structure} />
           ) : isFailedOrBlocked ? null : (
             <div className="no-issues">✓ No issues found</div>
           )}
