@@ -4,7 +4,7 @@ import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
 import { formatRedirectHop, type RedirectChain } from "@squirrelscan/core-contracts";
 
 import { didRedirect, targetKey } from "../shared/redirect-evidence";
-import { addSection, sectionMeta, withSection, type SectionCounts } from "./link-section-label";
+import { sectionMeta, tallyFields, tallySource, withSection, type SourceTally } from "./link-section-label";
 
 export const redirectChainsRule: Rule = {
   meta: {
@@ -79,9 +79,9 @@ export const redirectChainsRule: Rule = {
       });
     }
 
-    const linksToRedirect = new Map<string, Set<string>>();
-    // #2307: where the links to each redirecting target sit.
-    const sectionsToRedirect = new Map<string, SectionCounts>();
+    // The pages linking each redirecting target: each page once, with its links there and where
+    // on the page they sit (#2307, pub#837).
+    const linksToRedirect = new Map<string, SourceTally>();
 
     if (redirectTargets.size > 0) {
       for (const page of pages) {
@@ -94,10 +94,9 @@ export const redirectChainsRule: Rule = {
             // one of them is the mistake being reported.
             const target = targetKey(new URL(link.url, page.url).href);
             if (redirectTargets.has(target)) {
-              const sources = linksToRedirect.get(target) ?? new Set();
-              sources.add(page.url);
-              linksToRedirect.set(target, sources);
-              addSection(sectionsToRedirect, target, link.section);
+              let tally = linksToRedirect.get(target);
+              if (!tally) linksToRedirect.set(target, (tally = new Map()));
+              tallySource(tally, page.url, link.section);
             }
           } catch {
             continue;
@@ -111,14 +110,15 @@ export const redirectChainsRule: Rule = {
         name: "links-to-redirect",
         status: "warn",
         message: `${linksToRedirect.size} link target(s) point to redirecting URLs`,
-        items: [...linksToRedirect.entries()].map(([target, sources]) => {
+        items: [...linksToRedirect.entries()].map(([target, tally]) => {
           const redirect = redirectTargets.get(target);
           const label = redirect ? redirect.chainLabel : target;
-          const sections = sectionsToRedirect.get(target);
+          const { sourcePages, sources, sections } = tallyFields(tally);
           return {
             id: redirect?.originalUrl ?? target,
             label: withSection(label, sections),
-            sourcePages: [...sources],
+            sourcePages,
+            sources,
             meta: {
               targetUrl: redirect?.finalUrl ?? target,
               chain: redirect?.chain,

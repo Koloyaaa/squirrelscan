@@ -5,13 +5,22 @@ import {
   EXTERNAL_LINKS_NOT_CHECKED_SKIP_REASON,
   EXTERNAL_LINKS_OUT_OF_TIME_SKIP_REASON,
   EXTERNAL_LINKS_OVER_CAP_SKIP_REASON,
+  type CheckItemSource,
+  type LinkSection,
 } from "@squirrelscan/core-contracts";
 import { maskLinkTokens } from "@squirrelscan/utils/link-actions";
 import { isRateLimitStatus } from "@squirrelscan/utils/rate-limit";
 
 import type { Rule, RuleContext, RuleResult, CheckResult, SiteData } from "../types";
 
-import { addSection, sectionMeta, withSection, type SectionCounts } from "./link-section-label";
+import {
+  sectionMeta,
+  tallyFields,
+  tallySource,
+  withSection,
+  type SectionCounts,
+  type SourceTally,
+} from "./link-section-label";
 
 /**
  * A link the origin refused to answer because it was throttling us (#1829).
@@ -41,42 +50,78 @@ function countExternalLinks(pages: SiteData["pages"] | undefined): number {
   return hrefs.size;
 }
 
+/** Where a reported external link sits on the audited pages (#2307, pub#837). */
+interface ExternalPlacement {
+  /** Sections of every link to it, or undefined when none had a known section. */
+  sections(href: string): SectionCounts | undefined;
+  /** Per page of `sourcePages` the audited pages show: its links to `href` and their sections. */
+  sources(href: string, sourcePages: readonly string[]): CheckItemSource[] | undefined;
+}
+
 /**
- * Where on the audited pages each of `wanted` is linked from (#2307), by the link's resolved URL.
- * One pass over the pages' parsed links, and only the wanted URLs are kept. `wantedMasked` are the
+ * Where on the audited pages each of `wanted` is linked from, by the link's resolved URL. One
+ * pass over the pages' parsed links, and only the wanted URLs are kept. `wantedMasked` are the
  * hrefs the engine reports with token-like values masked (links never requested): a parsed link
  * is matched to them by its own masked form, so the credential itself is never kept or printed.
- * A crawl whose links carry no section yields nothing, and the items stay as they were.
+ * A crawl whose links carry no section yields no sections, and the labels stay as they were.
  */
-function externalSectionLookup(
+function externalPlacement(
   pages: SiteData["pages"] | undefined,
   wanted: ReadonlySet<string>,
   wantedMasked: ReadonlySet<string>
-): (href: string) => SectionCounts | undefined {
-  const byHref = new Map<string, SectionCounts>();
+): ExternalPlacement {
+  const byHref = new Map<string, SourceTally>();
+  const count = (key: string, page: string, section: LinkSection | undefined): void => {
+    let tally = byHref.get(key);
+    if (!tally) byHref.set(key, (tally = new Map()));
+    tallySource(tally, page, section);
+  };
   if (wanted.size > 0 || wantedMasked.size > 0) {
     // Distinct URLs are far fewer than links, and masking parses the URL.
     const masked = new Map<string, string>();
     for (const page of pages ?? []) {
       for (const link of page.parsed?.links ?? []) {
-        if (link.isInternal || !link.url || !link.section || link.section === "unknown") continue;
-        if (wanted.has(link.url)) addSection(byHref, link.url, link.section);
+        if (link.isInternal || !link.url) continue;
+        if (wanted.has(link.url)) count(link.url, page.url, link.section);
         if (wantedMasked.size === 0) continue;
         let key = masked.get(link.url);
         if (key === undefined) masked.set(link.url, (key = maskLinkTokens(link.url)));
-        if (wantedMasked.has(key)) addSection(byHref, key, link.section);
+        // A link written without a token masks to itself and was counted above.
+        if (key !== link.url && wantedMasked.has(key)) count(key, page.url, link.section);
       }
     }
   }
-  return (href) => byHref.get(href);
+  const fieldsOf = (href: string) => {
+    const tally = byHref.get(href);
+    return tally ? tallyFields(tally) : undefined;
+  };
+  return {
+    sections(href) {
+      const sections = fieldsOf(href)?.sections;
+      return sections && Object.keys(sections).length > 0 ? sections : undefined;
+    },
+    sources(href, sourcePages) {
+      const all = fieldsOf(href)?.sources;
+      if (!all) return undefined;
+      const listed = new Set(sourcePages);
+      const kept = all.filter((source) => listed.has(source.page));
+      return kept.length > 0 ? kept : undefined;
+    },
+  };
 }
 
-/** An item's `label` and `meta.sections`, or nothing when the links carry no section. */
-function sectionItemFields(
-  label: string,
-  sections: SectionCounts | undefined
-): { label?: string; meta?: { sections: SectionCounts } } {
-  return sections ? { label: withSection(label, sections), meta: { sections } } : {};
+/** An item's `label`, `meta.sections` and `sources`, or nothing the links do not say. */
+function placementItemFields(
+  href: string,
+  sourcePages: readonly string[],
+  placement: ExternalPlacement
+): { label?: string; meta?: { sections: SectionCounts }; sources?: CheckItemSource[] } {
+  const sections = placement.sections(href);
+  const sources = placement.sources(href, sourcePages);
+  return {
+    ...(sections ? { label: withSection(href, sections), meta: { sections } } : {}),
+    ...(sources ? { sources } : {}),
+  };
 }
 
 function notChecked(message: string, found: number): CheckResult {
@@ -101,7 +146,7 @@ function notChecked(message: string, found: number): CheckResult {
  */
 function notRequestedCheck(
   linkCheck: NonNullable<SiteData["externalLinkCheck"]>,
-  sectionsOf: (href: string) => SectionCounts | undefined,
+  placement: ExternalPlacement,
 ): CheckResult | null {
   const count = linkCheck.notRequested ?? 0;
   if (count === 0) return null;
@@ -118,7 +163,7 @@ function notRequestedCheck(
       ...(l.pageCount !== undefined && l.pageCount > l.sourcePages.length
         ? { pageCount: l.pageCount }
         : {}),
-      ...sectionItemFields(l.href, sectionsOf(l.href)),
+      ...placementItemFields(l.href, l.sourcePages, placement),
     })),
     details: {
       notRequested: count,
@@ -135,7 +180,7 @@ function notRequestedCheck(
  */
 function refusedCheck(
   linkCheck: NonNullable<SiteData["externalLinkCheck"]>,
-  sectionsOf: (href: string) => SectionCounts | undefined,
+  placement: ExternalPlacement,
 ): CheckResult | null {
   const count = linkCheck.refused ?? 0;
   if (count === 0) return null;
@@ -151,7 +196,7 @@ function refusedCheck(
       ...(l.pageCount !== undefined && l.pageCount > l.sourcePages.length
         ? { pageCount: l.pageCount }
         : {}),
-      ...sectionItemFields(l.href, sectionsOf(l.href)),
+      ...placementItemFields(l.href, l.sourcePages, placement),
     })),
     details: {
       refused: count,
@@ -234,7 +279,7 @@ export const brokenExternalLinksRule: Rule = {
     }
 
     const linkCheck = ctx.site?.externalLinkCheck;
-    // #2307: where each reported link sits. The URLs are collected first so the pages are walked
+    // #2307, pub#837: where each reported link sits. The URLs are collected first so the pages are walked
     // once, and only for links that end up in an item.
     const wanted = new Set<string>();
     const wantedMasked = new Set<string>();
@@ -246,9 +291,9 @@ export const brokenExternalLinksRule: Rule = {
     for (const l of externalLinks) {
       if (l.error || l.wafBlocked || isRateLimitedLink(l) || (l.status ?? 0) >= 400) wanted.add(l.href);
     }
-    const sectionsOf = externalSectionLookup(ctx.site?.pages, wanted, wantedMasked);
-    const notRequested = linkCheck ? notRequestedCheck(linkCheck, sectionsOf) : null;
-    const refused = linkCheck ? refusedCheck(linkCheck, sectionsOf) : null;
+    const placement = externalPlacement(ctx.site?.pages, wanted, wantedMasked);
+    const notRequested = linkCheck ? notRequestedCheck(linkCheck, placement) : null;
+    const refused = linkCheck ? refusedCheck(linkCheck, placement) : null;
 
     if (externalLinks.length === 0) {
       // Every external link was one the checker never requests, as an action
@@ -364,7 +409,8 @@ export const brokenExternalLinksRule: Rule = {
         status: "warn",
         message: `${brokenLinks.length} broken external link(s): ${summaryParts.join(", ")}`,
         items: brokenLinks.map((l) => {
-          const sections = sectionsOf(l.href);
+          const sections = placement.sections(l.href);
+          const sources = placement.sources(l.href, l.sourcePages);
           return {
             id: l.href,
             label: withSection(
@@ -372,6 +418,7 @@ export const brokenExternalLinksRule: Rule = {
               sections,
             ),
             sourcePages: l.sourcePages,
+            ...(sources ? { sources } : {}),
             meta: { status: l.status, error: l.error, ...sectionMeta(sections) },
           };
         }),
@@ -402,7 +449,8 @@ export const brokenExternalLinksRule: Rule = {
         status: "info",
         message: `${wafBlockedLinks.length} external link(s) could not be verified - status unverifiable`,
         items: wafBlockedLinks.map((l) => {
-          const sections = sectionsOf(l.href);
+          const sections = placement.sections(l.href);
+          const sources = placement.sources(l.href, l.sourcePages);
           return {
             id: l.href,
             label: withSection(
@@ -412,6 +460,7 @@ export const brokenExternalLinksRule: Rule = {
               sections,
             ),
             sourcePages: l.sourcePages,
+            ...(sources ? { sources } : {}),
             meta: { wafProvider: l.wafProvider, ...sectionMeta(sections) },
           };
         }),
@@ -426,11 +475,13 @@ export const brokenExternalLinksRule: Rule = {
         status: "info",
         message: `${rateLimitedLinks.length} external link(s) rate-limited - status unverifiable`,
         items: rateLimitedLinks.map((l) => {
-          const sections = sectionsOf(l.href);
+          const sections = placement.sections(l.href);
+          const sources = placement.sources(l.href, l.sourcePages);
           return {
             id: l.href,
             label: withSection(`${l.href} (${l.status ?? "rate limited"})`, sections),
             sourcePages: l.sourcePages,
+            ...(sources ? { sources } : {}),
             meta: { status: l.status, rateLimited: true, ...sectionMeta(sections) },
           };
         }),
