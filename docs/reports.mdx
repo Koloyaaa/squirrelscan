@@ -104,6 +104,45 @@ the work to do first:
 Categories are not top-level sections: a category with both an error and a
 warning appears under both severities.
 
+### Findings in a shared page region
+
+A finding that sits in a part of the page every page repeats (the site header,
+the site footer, the site navigation or a sidebar) is one thing to fix in one
+template, so the report names the region instead of listing every page:
+
+```text
+-> shop
+    In the site header, on 120 of 120 pages
+```
+
+A finding is shown this way when it sits in the region on at least 80% of the
+pages that have that region, and on at least 2 pages. The share is counted
+against the pages that have the region, not every audited page, so a footer
+missing from a few pages does not hide a finding that is on every footer. A
+sidebar on 6 pages is judged against those 6. When the finding is also
+elsewhere, the line says so (`, and on 3 other pages`) and those other pages
+are listed under it.
+
+The Markdown, text, LLM and console reports print the region line and no
+per-page list, and leave out the check's page list when its findings name their
+regions. The HTML report keeps every page, behind a collapsed list. The JSON
+and XML reports keep the bounded page list and add the region as data (see
+[source pages](/configuration/output#source-pages)).
+
+A finding in the page content, a finding in a region on only a few of the pages
+that have it, and any report without page structure data (a crawl stored
+before link sections were recorded, or the page classifier and landmarks found
+nothing) keep their page lists. Which part of the page a link sits in comes
+from the page's landmarks and the page classifier; see
+[link sections](/rules/links/broken-links#what-squirrel-checks). Nothing about
+how a finding is detected, its severity or the score changes.
+
+These rules record where their finding sits: `a11y/link-text`,
+`links/broken-links`, `links/broken-external-links`, `links/broken-anchors`,
+`links/redirect-chains`, `links/anchor-text`, `links/tel-mailto`,
+`links/https-downgrade`, `links/invalid-links`, `links/nofollow-internal` and
+`content/stale-copyright` (always the footer).
+
 ### console (default)
 
 Human-readable terminal output with colors and formatting.
