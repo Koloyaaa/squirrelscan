@@ -106,14 +106,32 @@ warning appears under both severities.
 
 ### Findings in a shared page region
 
-A finding that sits in a part of the page every page repeats (the site header,
-the site footer, the site navigation or a sidebar) is one thing to fix in one
-template, so the report names the region instead of listing every page:
+A finding that sits in a part of the page every page repeats is one thing to
+fix in one template, so the report names the region instead of listing every
+page:
 
 ```text
 -> shop
     In the site header, on 120 of 120 pages
 ```
+
+These are the regions, and how the line names them:
+
+| Region | The line reads |
+| --- | --- |
+| `header` | In the site header |
+| `footer` | In the site footer |
+| `navigation` | In the site navigation |
+| `sidebar` | In the sidebar |
+| `breadcrumbs` | In the breadcrumbs |
+| `pagination` | In the pagination |
+| `newsletter_signup` | In the newsletter signup |
+| `social_share` | In the social share links |
+| `business_info` | In the business details |
+| `account_login` | In the account links |
+
+The page content, comments, related content and the author byline differ from
+page to page and are never regions.
 
 A finding is shown this way when it sits in the region on at least 80% of the
 pages that have that region, and on at least 2 pages. The share is counted
