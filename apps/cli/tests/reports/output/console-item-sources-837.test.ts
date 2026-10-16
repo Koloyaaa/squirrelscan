@@ -93,4 +93,33 @@ describe("console broken link sources (pub#837)", () => {
     expect(out).not.toContain("from /p3");
     expect(out).toContain("... +2 more pages");
   });
+
+  test("an a11y item found on several pages lists them once, with no section", () => {
+    const report = createMinimalReport();
+    report.ruleResults = {
+      "a11y/link-text": {
+        meta: {
+          id: "a11y/link-text",
+          name: "Link Text",
+          description: "Links need descriptive text",
+          category: "a11y",
+          scope: "page",
+          severity: "warning",
+          weight: 4,
+        },
+        checks: Array.from({ length: 5 }, (_, k) => ({
+          name: "link-text-generic",
+          status: "warn" as const,
+          message: "1 link(s) with generic text",
+          pageUrl: `${SITE}/p${k}`,
+          items: [{ id: "read more" }],
+        })),
+      },
+    };
+    const out = capture(report);
+    expect(out).toMatch(/from \/p0\s/);
+    expect(out.split("from /p0").length - 1).toBe(1);
+    expect(out).toContain("... +2 more pages");
+    expect(out).not.toContain("see full list");
+  });
 });
