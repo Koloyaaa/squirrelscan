@@ -253,7 +253,7 @@ describe("rules whose category is not their id prefix (pub#836, pub#843)", () =>
     expect(r.errors).toEqual([]);
     for (const patterns of [r.enable, r.disable]) {
       expect(patterns[0]).toBe("reliability/*");
-      expect([...patterns.slice(1)].sort()).toEqual([...MOVED].sort());
+      expect(patterns.slice(1).sort()).toEqual([...MOVED].sort());
     }
   });
 
