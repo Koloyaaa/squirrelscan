@@ -20,15 +20,18 @@ Reliability rules check that what a page asks the browser to load actually loads
   <Card title="Broken external links: link rot on pages you cannot fix" icon="triangle-exclamation" href="/rules/links/broken-external-links">
     External links die without warning when the other site changes. squirrel checks each one and separates dead links from unverifiable ones.
   </Card>
+  <Card title="Broken anchor links: #fragments that point at nothing" icon="circle-exclamation" href="/rules/links/broken-anchors">
+    A link to #pricing whose target id is gone still loads, and the reader lands at the top of the page. squirrel checks every in-page anchor against its element.
+  </Card>
 </CardGroup>
 
-The two broken link rules keep their `links/` ids, so their pages live under [Links](/rules/links) and `links/*` selects them. They are Reliability rules in every report. A pattern matches on the id, not the category: to turn off everything Reliability scores, list them next to `reliability/*`.
+The three broken link rules keep their `links/` ids, so their pages live under [Links](/rules/links) and `links/*` selects them. They are Reliability rules in every report. A pattern matches on the id, not the category: to turn off everything Reliability scores, list them next to `reliability/*`.
 
 ## Disable all Reliability rules
 
 ```toml squirrel.toml
 [rules]
-disable = ["reliability/*", "links/broken-links", "links/broken-external-links"]
+disable = ["reliability/*", "links/broken-links", "links/broken-external-links", "links/broken-anchors"]
 ```
 
 Every audit reports Reliability findings next to the performance, security and agent experience rules. See [Core Web Vitals](https://squirrelscan.com/learn/core-web-vitals) for how an agent works through a report.

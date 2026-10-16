@@ -77,18 +77,20 @@ describe("runStreamingRules — canonical 518-page v1↔v2 merge gate", () => {
       // the same shape as 48 -> 49 above. main alone is 50 (verified with the rule
       // removed), so the move comes from this deliberate rule addition.
       expect(v1.healthScore.overall).toBe(51);
-      // pub#836: links/broken-links and links/broken-external-links are Reliability rules
-      // (ids unchanged). Both pass on the synthetic site, so the two passes leave the Links
-      // category (score 90 -> 86: 2504 passes and 2 warnings become 2502 and 2) and make the
-      // new Reliability category (2 of 2, score 100). Reliability rolls up into the Performance
-      // group (64 -> 65), the SEO group score stays 52 with two fewer passes (28799 -> 28797),
-      // and the overall health score is unmoved: it weights every rule the same wherever it sits.
+      // pub#836, pub#843: links/broken-links, links/broken-external-links and links/broken-anchors
+      // are Reliability rules (ids unchanged). All three pass on the synthetic site, so their three
+      // passes leave the Links category and make the new Reliability category (3 of 3, score 100).
+      // Links moved 90 -> 86 when the first two left (2504 passes and 2 warnings became 2502 and 2)
+      // and 86 -> 84 when broken-anchors left (2501 and 2). Reliability rolls up into the Performance
+      // group (64 -> 65 with #836, unchanged by #843: 8005 -> 8006 passes), the SEO group score stays
+      // 52 with three fewer passes (28799 -> 28796), and the overall health score is unmoved: it
+      // weights every rule the same wherever it sits.
       const category = (code: string) => v1.healthScore.categories.find((c) => c.category === code);
       const group = (code: string) => v1.healthScore.groups.find((g) => g.group === code);
-      expect(category("links")).toMatchObject({ score: 86, passed: 2502, warnings: 2, failed: 0 });
-      expect(category("reliability")).toMatchObject({ score: 100, passed: 2, warnings: 0, failed: 0 });
-      expect(group("performance")).toMatchObject({ score: 65, passed: 8005, warnings: 1000, failed: 0 });
-      expect(group("seo")).toMatchObject({ score: 52, passed: 28797, warnings: 3498, failed: 500 });
+      expect(category("links")).toMatchObject({ score: 84, passed: 2501, warnings: 2, failed: 0 });
+      expect(category("reliability")).toMatchObject({ score: 100, passed: 3, warnings: 0, failed: 0 });
+      expect(group("performance")).toMatchObject({ score: 65, passed: 8006, warnings: 1000, failed: 0 });
+      expect(group("seo")).toMatchObject({ score: 52, passed: 28796, warnings: 3498, failed: 500 });
       // 97711 -> 98211: content/hidden-text emits one page check across the 500
       // fixture pages that have a document, and passes on every one of them. The
       // overall score is unmoved.

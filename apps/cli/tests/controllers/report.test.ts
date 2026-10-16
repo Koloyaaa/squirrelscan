@@ -181,6 +181,21 @@ describe("loadReport - slim JSON reconstruction", () => {
     ).toBe("links");
   });
 
+  test("a broken-anchors issue follows the category it was written with (pub#843)", () => {
+    expect(
+      loadedCategory(
+        slimWithCategory("links/broken-anchors", "Reliability"),
+        "links/broken-anchors"
+      )
+    ).toBe("reliability");
+    expect(
+      loadedCategory(
+        slimWithCategory("links/broken-anchors", "Links"),
+        "links/broken-anchors"
+      )
+    ).toBe("links");
+  });
+
   test("slim JSON with no category, or one this version does not know, falls back to the id prefix", () => {
     expect(
       loadedCategory(
