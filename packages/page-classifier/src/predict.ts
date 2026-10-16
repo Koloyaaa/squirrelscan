@@ -171,6 +171,49 @@ export function tryLoadModel(json: unknown): { model: Model | null; reason: stri
   }
 }
 
+export interface PageTypePick {
+  /** Index of the model's best admissible class, or -1 when none is admissible. */
+  index: number;
+  /** That class's softmax probability as the model gave it, never renormalised:
+   *  the per-class bars were tuned on unrenormalised probabilities. 0 when
+   *  nothing is admissible. */
+  probability: number;
+  /** Whether the class clears its own bar. False means the rules answer. */
+  fires: boolean;
+}
+
+/**
+ * The model's page type answer, from one softmax row.
+ *
+ * `homepage` is a URL rule: the artifact's head has the class, but off the root
+ * path it is never an answer. With `allowHomepage` false the best OTHER class
+ * is chosen instead, at its own probability against its own bar. With it true
+ * this is the plain argmax. Ties go to the lower class index, as `softmax` does,
+ * and a NaN probability is never chosen.
+ *
+ * @param probabilities one probability per class, in class order
+ * @param thresholds one bar per class, in class order
+ */
+export function selectPageType(
+  probabilities: ArrayLike<number>,
+  classes: readonly string[],
+  thresholds: ArrayLike<number>,
+  allowHomepage: boolean,
+): PageTypePick {
+  let index = -1;
+  let best = -Infinity;
+  for (let i = 0; i < classes.length; i++) {
+    if (!allowHomepage && classes[i] === "homepage") continue;
+    // `>` against -Infinity: a NaN probability is never the best, and a tie keeps the lower index.
+    if (probabilities[i]! > best) {
+      best = probabilities[i]!;
+      index = i;
+    }
+  }
+  if (index === -1) return { index, probability: 0, fires: false };
+  return { index, probability: best, fires: best >= thresholds[index]! };
+}
+
 /** Parses through the same entry the CLI uses, so inference sees the same DOM
  *  the training data was built from. */
 export function classifyPage(
@@ -230,11 +273,13 @@ export function classifyDocument(
       : null;
 
   // Page type. The homepage rule runs FIRST, ahead of the model, because it is
-  // the one page class whose label comes from the URL: the model was
-  // never trained on it and cannot produce it.
+  // the one page class whose label comes from the URL. The artifact's head has
+  // a `homepage` class, but on a non-root URL it is never an answer: the model
+  // picks the best other class (selectPageType) or the rules answer.
   let pageType: Prediction<PageTypeLabel>;
   const ruleType = rulePageType(document as never, url);
-  if (isRootPath(url) && ruleType === "homepage") {
+  const rootPath = isRootPath(url);
+  if (rootPath && ruleType === "homepage") {
     pageType = { label: "homepage", confidence: 1, source: "rules" };
   } else if (usable) {
     const values = withExtraBlock(
@@ -250,18 +295,21 @@ export function classifyDocument(
     );
     const scores = new Float32Array(usable.pageType.numClass);
     scoreRow(usable.pageType, values, scores);
-    const { index, probability } = softmax(scores);
+    softmax(scores);
     // Per class when the artifact carries them (page type v8); otherwise every
     // entry equals the head's single confidenceThreshold.
-    const threshold = options.threshold ?? thresholdsFor(usable.pageType, platform)[index]!;
-    pageType =
-      probability >= threshold
-        ? {
-            label: usable.pageType.classes[index] as PageTypeLabel,
-            confidence: probability,
-            source: "model",
-          }
-        : { label: ruleType, confidence: probability, source: "rules" };
+    const thresholds =
+      options.threshold !== undefined
+        ? new Float64Array(usable.pageType.numClass).fill(options.threshold)
+        : thresholdsFor(usable.pageType, platform);
+    const pick = selectPageType(scores, usable.pageType.classes, thresholds, rootPath);
+    pageType = pick.fires
+      ? {
+          label: usable.pageType.classes[pick.index] as PageTypeLabel,
+          confidence: pick.probability,
+          source: "model",
+        }
+      : { label: ruleType, confidence: pick.probability, source: "rules" };
   } else {
     pageType = { label: ruleType, confidence: ruleType === "unknown" ? 0 : 1, source: "rules" };
   }

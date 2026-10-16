@@ -179,9 +179,11 @@ interface SchemaDocument {
  * Page type from the page's own structured data, or from the URL for the one
  * case that is genuinely a URL rule.
  *
- * `homepage` is ONLY ever produced here, never by the model: its label
- * is derived from the path being "/", and the URL shape is a model feature, so
- * training on it would have taught the model a rule that can simply be stated.
+ * `homepage` comes from the URL here: the path being "/" is a rule that can
+ * simply be stated. The artifact's page-type head also has a `homepage` class,
+ * but predict.ts never returns it for a non-root URL (selectPageType picks the
+ * best other class, or falls back to this function), so no non-root page is
+ * ever labelled `homepage`, from the model or from the rules.
  */
 export function rulePageType(document: SchemaDocument, url: string): PageTypeLabel {
   const types = new Set<string>();

@@ -17,14 +17,22 @@ import {
   thresholdsFor,
 } from "../src/model-format";
 import {
+  featurizeDocument,
   FEATURIZER_VERSION,
   NODE_FEATURE_NAMES,
   PAGE_FEATURE_NAMES,
   TOKEN_BUCKETS,
   tokenBucket,
 } from "../src/featurize";
-import { classifyPage, tryLoadModel, withExtraBlock } from "../src/predict";
+import {
+  classifyPage,
+  selectPageType,
+  toVector,
+  tryLoadModel,
+  withExtraBlock,
+} from "../src/predict";
 import { isRootPath } from "../src/rules-fallback";
+import { parseHTML } from "@squirrelscan/parser/dom";
 
 const ARTIFACT = join(import.meta.dir, "../assets/classifier-v2.json");
 const HAS_ARTIFACT = existsSync(ARTIFACT);
@@ -723,5 +731,384 @@ describe.if(HAS_ARTIFACT)("per-class thresholds", () => {
       expect(typeof node.rawLabel).toBe("string");
       expect(node.rawConfidence).toBeGreaterThan(0);
     }
+  });
+});
+
+// pub#900: `homepage` is a URL rule. The artifact's page-type head has the class, but off the root path
+// the model never answers it.
+const HEAD_CLASSES = [
+  "homepage",
+  "product_detail",
+  "product_listing",
+  "article",
+  "blog_post",
+  "about",
+  "contact",
+  "docs",
+  "legal",
+  "pricing",
+  "listing_index",
+  "other",
+];
+// The shipped per-class bars, in class order.
+const HEAD_BARS = [0.3, 0.94, 0.98, 0.95, 0.74, 0.77, 0.68, 0.87, 0.56, 0.93, 0.97, 0.91];
+
+// A probability row from a few named classes; the rest get nothing.
+const row = (given: Record<string, number>): number[] =>
+  HEAD_CLASSES.map((name) => given[name] ?? 0);
+
+describe("selectPageType: homepage is never the model's answer off the root path", () => {
+  test("on the root path it is the plain argmax, homepage included", () => {
+    const pick = selectPageType(row({ homepage: 0.6, other: 0.3 }), HEAD_CLASSES, HEAD_BARS, true);
+    expect(pick).toEqual({ index: 0, probability: 0.6, fires: true });
+  });
+
+  test("off the root path the best OTHER class is chosen, at its own probability", () => {
+    const pick = selectPageType(
+      row({ homepage: 0.6, about: 0.25, other: 0.1 }),
+      HEAD_CLASSES,
+      HEAD_BARS,
+      false,
+    );
+    expect(pick.index).toBe(HEAD_CLASSES.indexOf("about"));
+    // Not renormalised: the bars were tuned on the head's own probabilities (0.25, not 0.25 / 0.4).
+    expect(pick.probability).toBe(0.25);
+  });
+
+  test("a best other class under its own bar is the rules answer, not a model answer", () => {
+    // about clears nothing at 0.25 against a 0.77 bar.
+    const pick = selectPageType(
+      row({ homepage: 0.6, about: 0.25, other: 0.1 }),
+      HEAD_CLASSES,
+      HEAD_BARS,
+      false,
+    );
+    expect(pick.fires).toBe(false);
+  });
+
+  test("the best other class fires when it clears its own bar", () => {
+    // Bars lowered, as a platform override or the `threshold` option can: blog_post 0.35 >= 0.3.
+    const bars = HEAD_BARS.map(() => 0.3);
+    const pick = selectPageType(row({ homepage: 0.4, blog_post: 0.35 }), HEAD_CLASSES, bars, false);
+    expect(pick).toEqual({
+      index: HEAD_CLASSES.indexOf("blog_post"),
+      probability: 0.35,
+      fires: true,
+    });
+  });
+
+  test("the bar that counts is the chosen class's, not homepage's", () => {
+    // homepage's own bar (0.3) is cleared by 0.4, but about's 0.77 is not cleared by 0.35.
+    const pick = selectPageType(
+      row({ homepage: 0.4, about: 0.35 }),
+      HEAD_CLASSES,
+      HEAD_BARS,
+      false,
+    );
+    expect(pick.index).toBe(HEAD_CLASSES.indexOf("about"));
+    expect(pick.fires).toBe(false);
+  });
+
+  test("when homepage is not the top class the veto changes nothing", () => {
+    const probabilities = row({ blog_post: 0.8, homepage: 0.1, other: 0.05 });
+    const open = selectPageType(probabilities, HEAD_CLASSES, HEAD_BARS, true);
+    const closed = selectPageType(probabilities, HEAD_CLASSES, HEAD_BARS, false);
+    expect(closed).toEqual(open);
+    expect(open.fires).toBe(true);
+  });
+
+  test("ties go to the lower class index", () => {
+    const pick = selectPageType(row({ about: 0.4, contact: 0.4 }), HEAD_CLASSES, HEAD_BARS, false);
+    expect(pick.index).toBe(HEAD_CLASSES.indexOf("about"));
+  });
+
+  test("a head with no class besides homepage has nothing to answer", () => {
+    const pick = selectPageType([1], ["homepage"], [0.3], false);
+    expect(pick).toEqual({ index: -1, probability: 0, fires: false });
+  });
+
+  test("with the shipped bars no other class can clear its bar when homepage is on top", () => {
+    // The lowest other bar is 0.56 and the top class has more than any other: both cannot be true, so off the
+    // root path the shipped bars always give the rules answer. The next-class branch is reached only with
+    // lowered bars (a platform override, the `threshold` option).
+    const lowestOther = Math.min(...HEAD_BARS.slice(1));
+    expect(lowestOther).toBeGreaterThan(0.5);
+  });
+});
+
+describe("a non-root page is never labelled homepage, with or without a model", () => {
+  const HOME = `<!doctype html><html><head><title>Example</title>
+    <script type="application/ld+json">{"@type":"WebSite","name":"Example"}</script>
+    <meta property="og:type" content="website"></head><body><main><h1>Example</h1>
+    <p>We make widgets for people.</p></main></body></html>`;
+
+  test("the rules never answer homepage for another path, whatever the structured data says", () => {
+    for (const path of ["/welcome", "/en/", "/index.html", "/a/b", "/a?x=1"]) {
+      const out = classifyPage(HOME, `https://example.com${path}`);
+      expect(out.pageType.label).not.toBe("homepage");
+    }
+    // The root path is unchanged.
+    expect(classifyPage(HOME, "https://example.com/").pageType).toEqual({
+      label: "homepage",
+      confidence: 1,
+      source: "rules",
+    });
+  });
+});
+
+// A landing page: hero, feature grid, logos, a call to action. The shipped head reads it as a home page.
+const NAV = `<header class="site-header"><nav><a href="/">Home</a> <a href="/features">Features</a>
+  <a href="/pricing">Pricing</a> <a href="/about">About</a> <a href="/contact">Contact</a></nav></header>`;
+const FOOTER = `<footer class="site-footer"><p>&copy; 2026 Example Co. All rights reserved.</p>
+  <a href="/privacy">Privacy</a> <a href="/terms">Terms</a></footer>`;
+const LANDING = `<!doctype html><html lang="en"><head><title>Example: build faster</title>
+<meta name="description" content="Example: build faster"></head><body class="home">${NAV}<main>
+<section class="hero"><h1>Build faster with Example</h1><p>The all-in-one platform for teams that ship.</p>
+  <a class="btn btn-primary" href="/signup">Get started</a> <a class="btn" href="/demo">Book a demo</a></section>
+<section class="features"><h2>Why teams choose us</h2><div class="grid">
+  <div class="feature"><h3>Fast</h3><p>Deploys in seconds.</p></div>
+  <div class="feature"><h3>Secure</h3><p>SOC 2 and SSO built in.</p></div>
+  <div class="feature"><h3>Open</h3><p>APIs for everything.</p></div></div></section>
+<section class="logos"><h2>Trusted by</h2><ul><li><img src="/a.svg" alt="A"></li>
+  <li><img src="/b.svg" alt="B"></li><li><img src="/c.svg" alt="C"></li></ul></section>
+<section class="testimonials"><h2>What customers say</h2><blockquote>Best tool we adopted this year.</blockquote></section>
+<section class="cta"><h2>Ready to start?</h2><a class="btn btn-primary" href="/signup">Create your account</a></section>
+</main>${FOOTER}</body></html>`;
+const LOCALE_ROOT = "https://example.com/en/";
+
+describe.if(HAS_ARTIFACT)(
+  "the shipped head never answers homepage off the root path (#900)",
+  () => {
+    // The model's own answer for the page: the head's softmax row, before any URL rule.
+    const probabilitiesFor = (
+      model: NonNullable<ReturnType<typeof tryLoadModel>["model"]>,
+      html: string,
+      url: string,
+    ) => {
+      const { document } = parseHTML(html);
+      const featurized = featurizeDocument(document as never, url, {});
+      const values = withExtraBlock(
+        toVector(
+          featurized.page.features,
+          featurized.page.tokens,
+          model.pageFeatureCount,
+          null,
+          null,
+        ),
+        model.pageType.extraFeatureCount,
+        null,
+      );
+      const scores = new Float32Array(model.pageType.numClass);
+      scoreRow(model.pageType, values, scores);
+      softmax(scores);
+      return scores;
+    };
+
+    test("the premise: the landing page's top class is homepage and clears its bar", () => {
+      // Before the fix this page came back as {label: "homepage", source: "model"} on a non-root path.
+      const { model } = tryLoadModel(artifactJson());
+      const probabilities = probabilitiesFor(model!, LANDING, LOCALE_ROOT);
+      const bars = thresholdsFor(model!.pageType, "custom");
+      const open = selectPageType(probabilities, model!.pageType.classes, bars, true);
+      expect(model!.pageType.classes[open.index]).toBe("homepage");
+      expect(open.fires).toBe(true);
+    });
+
+    test("a non-root URL with that markup is not homepage, from the model or the rules", () => {
+      const { model } = tryLoadModel(artifactJson());
+      const out = classifyPage(LANDING, LOCALE_ROOT, { model });
+      expect(out.degraded).toBe("");
+      expect(out.pageType.label).not.toBe("homepage");
+      // The best other class is far under its bar, so the answer is the rules'.
+      expect(out.pageType.source).toBe("rules");
+      expect(out.pageType.label).toBe("unknown");
+      // The fallback's confidence is the best OTHER class's probability (not homepage's ~0.9).
+      const closed = selectPageType(
+        probabilitiesFor(model!, LANDING, LOCALE_ROOT),
+        model!.pageType.classes,
+        thresholdsFor(model!.pageType, "custom"),
+        false,
+      );
+      expect(closed.fires).toBe(false);
+      expect(out.pageType.confidence).toBeCloseTo(closed.probability, 6);
+      expect(out.pageType.confidence).toBeLessThan(0.5);
+      for (const path of ["/welcome", "/home", "/index.html", "/lp/spring", "/a/b/c"]) {
+        expect(
+          classifyPage(LANDING, `https://example.com${path}`, { model }).pageType.label,
+        ).not.toBe("homepage");
+      }
+    });
+
+    test("the root path is unchanged: homepage from the rules at confidence 1", () => {
+      const { model } = tryLoadModel(artifactJson());
+      for (const url of [
+        "https://example.com/",
+        "https://example.com",
+        "https://example.com/?a=1",
+      ]) {
+        expect(classifyPage(LANDING, url, { model }).pageType).toEqual({
+          label: "homepage",
+          confidence: 1,
+          source: "rules",
+        });
+      }
+    });
+
+    test("the `threshold` option still applies: the best other class answers when it clears the bar", () => {
+      const { model } = tryLoadModel(artifactJson());
+      const closed = selectPageType(
+        probabilitiesFor(model!, LANDING, LOCALE_ROOT),
+        model!.pageType.classes,
+        new Float64Array(model!.pageType.numClass).fill(0.001),
+        false,
+      );
+      const out = classifyPage(LANDING, LOCALE_ROOT, { model, threshold: 0.001 });
+      expect(out.pageType.source).toBe("model");
+      expect<string>(out.pageType.label).toBe(model!.pageType.classes[closed.index]!);
+      expect(out.pageType.label).not.toBe("homepage");
+      expect(out.pageType.confidence).toBeCloseTo(closed.probability, 6);
+      // A bar nothing can clear is the rules answer, and still never homepage.
+      const none = classifyPage(LANDING, LOCALE_ROOT, { model, threshold: 1.01 });
+      expect(none.pageType.source).toBe("rules");
+      expect(none.pageType.label).not.toBe("homepage");
+    });
+
+    test("platform thresholds still apply to the class the head picks", () => {
+      const json = artifactJson() as Record<string, Record<string, unknown>>;
+      const classes = (json.pageType as unknown as { classes: string[] }).classes;
+      // wix gets bars every class clears; every other platform keeps the head's own.
+      json.pageType!.platformClassThresholds = {
+        wix: Object.fromEntries(classes.map((c) => [c, 0.001])),
+      };
+      const { model } = tryLoadModel(json);
+      const guarded = classifyPage(LANDING, LOCALE_ROOT, { model, platform: "wix" });
+      expect(guarded.platform).toBe("wix");
+      expect(guarded.pageType.source).toBe("model");
+      expect(guarded.pageType.label).not.toBe("homepage");
+      const other = classifyPage(LANDING, LOCALE_ROOT, { model, platform: "shopify" });
+      expect(other.pageType.source).toBe("rules");
+      expect(other.pageType.label).not.toBe("homepage");
+    });
+  },
+);
+
+describe("selectPageType edge cases", () => {
+  test("a NaN probability is never the best class", () => {
+    const pick = selectPageType(
+      [0.1, Number.NaN, 0.9],
+      ["homepage", "about", "contact"],
+      [0.3, 0.5, 0.5],
+      false,
+    );
+    expect(pick).toEqual({ index: 2, probability: 0.9, fires: true });
+    const allNaN = selectPageType(
+      [Number.NaN, Number.NaN],
+      ["homepage", "about"],
+      [0.3, 0.5],
+      false,
+    );
+    expect(allNaN).toEqual({ index: -1, probability: 0, fires: false });
+  });
+
+  test("a head without a homepage class is the plain argmax either way", () => {
+    const classes = ["about", "contact"];
+    for (const allow of [true, false]) {
+      expect(selectPageType([0.2, 0.7], classes, [0.5, 0.5], allow)).toEqual({
+        index: 1,
+        probability: 0.7,
+        fires: true,
+      });
+    }
+  });
+});
+
+// The wiring, with no dependency on what the shipped model predicts: a two-class head ["homepage", "about"] whose
+// logits never change (the split column is a token no page sets), so every page reads homepage at ~0.99995 and
+// about at ~0.0000454. The `about` bar then decides whether the best other class fires.
+describe("page-type selection through classifyPage, with a head that always says homepage", () => {
+  const NEVER_SET = PAGE_FEATURE_NAMES.length + tokenBucket("t:never-set-on-any-fixture");
+  const modelFor = (aboutBar: number, platformBars?: Record<string, Record<string, number>>) =>
+    loadModel({
+      format: "squirrel-dom-classifier",
+      artifactVersion: 1,
+      featurizerVersion: FEATURIZER_VERSION,
+      nodeFeatureCount: NODE_FEATURE_NAMES.length,
+      pageFeatureCount: PAGE_FEATURE_NAMES.length,
+      tokenBuckets: TOKEN_BUCKETS,
+      region: oneSplitHead(null),
+      pageType: {
+        ...columnHead(NEVER_SET, ["homepage", "about"], undefined, [0.3, aboutBar]),
+        ...(platformBars ? { platformClassThresholds: platformBars } : {}),
+      },
+    });
+  const ABOUT_P = 1 / (1 + Math.exp(10));
+  const NON_ROOT = "https://example.com/en/";
+  const ROOT = "https://example.com/";
+  const PLAIN = `<!doctype html><html><head><title>T</title></head><body><main><p>Some text.</p></main></body></html>`;
+
+  test("the premise: the head reads homepage on the root path of a page with other structured data", () => {
+    const out = classifyPage(PAGE, ROOT, { model: modelFor(0.5) });
+    expect(out.degraded).toBe("");
+    expect(out.pageType.label).toBe("homepage");
+    expect(out.pageType.source).toBe("model");
+    expect(out.pageType.confidence).toBeGreaterThan(0.9999);
+  });
+
+  test("off the root path the best other class under its bar is the rules answer", () => {
+    const out = classifyPage(PLAIN, NON_ROOT, { model: modelFor(0.5) });
+    expect(out.pageType.source).toBe("rules");
+    expect(out.pageType.label).toBe("unknown");
+    expect(out.pageType.confidence).toBeCloseTo(ABOUT_P, 6);
+    // The rules label wins over unknown when the markup has one, still carrying about's probability.
+    const article = classifyPage(PAGE, URL, { model: modelFor(0.5) });
+    expect(article.pageType.label).toBe("article");
+    expect(article.pageType.source).toBe("rules");
+    expect(article.pageType.confidence).toBeCloseTo(ABOUT_P, 6);
+  });
+
+  test("off the root path the best other class over its own bar is the model's answer", () => {
+    const out = classifyPage(PLAIN, NON_ROOT, { model: modelFor(1e-6) });
+    expect(out.pageType.source).toBe("model");
+    expect(out.pageType.label).toBe("about");
+    expect(out.pageType.confidence).toBeCloseTo(ABOUT_P, 6);
+  });
+
+  test("the root path is unchanged: the URL rule, confidence 1, whatever the bars say", () => {
+    for (const bar of [0.5, 1e-6]) {
+      expect(classifyPage(PLAIN, ROOT, { model: modelFor(bar) }).pageType).toEqual({
+        label: "homepage",
+        confidence: 1,
+        source: "rules",
+      });
+    }
+  });
+
+  test("the `threshold` option applies to the class the head picks, including 0", () => {
+    expect(
+      classifyPage(PLAIN, NON_ROOT, { model: modelFor(0.5), threshold: 0 }).pageType,
+    ).toMatchObject({
+      label: "about",
+      source: "model",
+    });
+    expect(
+      classifyPage(PLAIN, NON_ROOT, { model: modelFor(1e-6), threshold: 1.01 }).pageType.source,
+    ).toBe("rules");
+  });
+
+  test("a platform override is read at the picked class, not at homepage", () => {
+    // wix: about's bar is low and homepage's is high, so about fires. Another platform keeps the head's 0.5.
+    const wix = modelFor(0.5, { wix: { homepage: 0.99, about: 1e-6 } });
+    expect(classifyPage(PLAIN, NON_ROOT, { model: wix, platform: "wix" }).pageType).toMatchObject({
+      label: "about",
+      source: "model",
+    });
+    expect(classifyPage(PLAIN, NON_ROOT, { model: wix, platform: "shopify" }).pageType.source).toBe(
+      "rules",
+    );
+    // The other way round: a low homepage bar must not let about through when about's own bar is high.
+    const flipped = modelFor(1e-6, { wix: { homepage: 1e-6, about: 0.5 } });
+    expect(classifyPage(PLAIN, NON_ROOT, { model: flipped, platform: "wix" }).pageType.source).toBe(
+      "rules",
+    );
   });
 });

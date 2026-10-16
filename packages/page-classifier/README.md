@@ -34,18 +34,18 @@ Options (all optional): `model`, `budgetMs` (per page, default 500), `scoringBat
 ## Three heads
 
 - **region**: site_header, footer, navigation, sidebar, main_content, content_block, article_chrome, form, search, dialog. Nodes the strict thresholds leave unknown can come back `site_chrome` when the four furniture classes together are sure.
-- **page type**: homepage, product_detail, product_listing, article, blog_post, about, contact, docs, legal, pricing, listing_index, other.
+- **page type**: homepage, product_detail, product_listing, article, blog_post, about, contact, docs, legal, pricing, listing_index, other. `homepage` is a URL rule: a page whose path is `/` gets it from the rules at confidence 1, unless its own structured data names another type. The head also has a `homepage` class, but it is never emitted for a path other than `/`. There the answer is the head's best other class when that class clears its own threshold (its probability as the head gave it, not renormalised), else the rules answer, whose `confidence` is that best other class's probability.
 - **section purpose**: faq_block, reviews, breadcrumbs, business_info, product_offer, author_byline, video_embed, ad, cookie_consent, newsletter_signup, social_share, related_content, comments, promo_banner, pagination, table_of_contents, account_login, locale_switcher. `section` is present on a node only when the class clears its threshold.
 
 ## Precedence: markup wins, the model fills the silence
 
 A node with its own landmark tag or ARIA role is answered by the rules at confidence 1, and the model is not asked about it. The model answers nodes whose markup says nothing. Comment threads are read from markup by a deterministic rule on every page, with or without a model, and win over the section head.
 
-`source` is provenance, not quality: display it, never branch on it. `confidence` is the model's probability for `model` and 1 (or 0 for `unknown`) for `rules`. `unknown` is a real answer meaning no evidence.
+`source` is provenance, not quality: display it, never branch on it. `confidence` is the model's probability for `model` and 1 (or 0 for `unknown`) for `rules`, except a page type the model did not stand behind: that is the rules answer carrying the model's probability for its best admissible class. `unknown` is a real answer meaning no evidence.
 
 ## Thresholds
 
-Every head carries one threshold per class, chosen for precision on held-out pages. A class that cannot hold the bar gets a threshold above 1 and abstains. A below-threshold answer comes back `label: "unknown"`, `source: "model"`, with `rawLabel` and `rawConfidence` for debugging only: never show them.
+Every head carries one threshold per class, chosen for precision on held-out pages. A class that cannot hold the bar gets a threshold above 1 and abstains. A below-threshold region or section answer comes back `label: "unknown"`, `source: "model"`, with `rawLabel` and `rawConfidence` for debugging only: never show them. A below-threshold page type is the rules answer.
 
 A head may also carry per-platform overrides (`platformClassThresholds`), applied from the platform the page's HTML fingerprints as.
 
