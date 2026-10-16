@@ -17,6 +17,10 @@ How it works:
 
 ## [Unreleased]
 
+### Fixed
+
+- `links/tel-mailto` counts Cloudflare email-protection links as the mailto links they stand for, and validates the address they decode to. 0.0.116 stopped reporting them as broken pages, but this rule never counted them, so a contact page whose only email link was obfuscated read "No tel: or mailto: links found". See [links/tel-mailto](https://docs.squirrelscan.com/rules/links/tel-mailto).
+
 ## v0.0.116 (2026-10-16)
 
 A release about link results and local sites. Cloudflare email-protection links no longer count as broken links, a public page's leftover link to a local-only name is flagged again, a `.test` or `.local` site typed without a scheme is audited over http, and the external link check shows its progress as it runs.

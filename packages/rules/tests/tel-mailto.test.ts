@@ -223,3 +223,59 @@ describe("links/tel-mailto — optional trunk prefix (0) in the display (pub#663
     expect(withoutOptionalTrunkZero("(0)6061 630 980 0")).toBeNull();
   });
 });
+
+// pub#838: Cloudflare's email obfuscation rewrites a `mailto:` link to
+// `/cdn-cgi/l/email-protection#<hex>` (and an address in the text to an anchor
+// carrying `data-cfemail`). It is an email link, so it counts as a mailto here
+// rather than vanishing, and the address it decodes to is validated.
+describe("links/tel-mailto — Cloudflare email-protection links (pub#838)", () => {
+  /** Cloudflare's encoding: a key byte, then each UTF-8 byte XOR the key, all hex. */
+  const encode = (text: string, key = 0x5a): string =>
+    [key, ...new TextEncoder().encode(text).map((b) => b ^ key)]
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+
+  const mailtoRow = (checks: ReturnType<typeof telMailtoRule.run>["checks"]) =>
+    checks.find((c) => c.name === "mailto-links");
+
+  test("an obfuscated mailto link and an obfuscated address count as mailto links", () => {
+    const html = page(
+      `<a href="/cdn-cgi/l/email-protection#${encode("hi@example.com")}">[email&#160;protected]</a>` +
+        `<a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="${encode("a@example.com")}">[email&#160;protected]</a>` +
+        `<a href="mailto:plain@example.com">plain@example.com</a>`,
+    );
+    const { checks } = telMailtoRule.run(ctx(html));
+    expect(mailtoRow(checks)).toMatchObject({
+      status: "pass",
+      message: "3 mailto: link(s) found (2 obfuscated by Cloudflare)",
+      details: { cloudflareObfuscated: 2 },
+    });
+    expect(checks.find((c) => c.name === "tel-mailto")).toBeUndefined();
+  });
+
+  test("a decoded address that is not an email warns like a plain mailto; an undecodable one is not judged", () => {
+    const bad = telMailtoRule.run(
+      ctx(page(`<a href="/cdn-cgi/l/email-protection#${encode("not-an-address@")}">mail</a>`)),
+    ).checks;
+    expect(mailtoRow(bad)).toMatchObject({
+      status: "warn",
+      message: "1/1 mailto: link(s) may be invalid",
+      value: "mailto:not-an-address@",
+    });
+
+    const undecodable = telMailtoRule.run(
+      ctx(page(`<a href="/cdn-cgi/l/email-protection#abcd">[email&#160;protected]</a>`)),
+    ).checks;
+    expect(mailtoRow(undecodable)).toMatchObject({
+      status: "pass",
+      message: "1 mailto: link(s) found (1 obfuscated by Cloudflare)",
+    });
+  });
+
+  test("the [email protected] placeholder text is never a mismatch", () => {
+    const { checks } = telMailtoRule.run(
+      ctx(page(`<a href="/cdn-cgi/l/email-protection#${encode("hi@example.com")}">[email&#160;protected]</a>`)),
+    );
+    expect(checks.find((c) => c.name === "mailto-mismatch")).toBeUndefined();
+  });
+});

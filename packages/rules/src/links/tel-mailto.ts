@@ -204,6 +204,19 @@ export const telMailtoRule: Rule = {
       }
     }
 
+    // pub#838: Cloudflare's email obfuscation rewrites mailto: links (and
+    // addresses in the text) to /cdn-cgi/l/email-protection links, which the
+    // parser carries as contact links with the decoded address. They are
+    // email links: counted, and validated when the address decoded.
+    let cloudflareObfuscated = 0;
+    for (const contact of ctx.parsed.contactLinks ?? []) {
+      if (contact.obfuscated !== "cloudflare") continue;
+      cloudflareObfuscated++;
+      const href = `mailto:${contact.value}`;
+      mailtoLinks.push(href);
+      if (contact.value && !contact.value.includes(".")) invalidMailto.push(href);
+    }
+
     // Report findings
     if (telLinks.length > 0) {
       if (invalidTel.length > 0) {
@@ -234,7 +247,11 @@ export const telMailtoRule: Rule = {
         checks.push({
           name: "mailto-links",
           status: "pass",
-          message: `${mailtoLinks.length} mailto: link(s) found`,
+          message:
+            cloudflareObfuscated > 0
+              ? `${mailtoLinks.length} mailto: link(s) found (${cloudflareObfuscated} obfuscated by Cloudflare)`
+              : `${mailtoLinks.length} mailto: link(s) found`,
+          ...(cloudflareObfuscated > 0 ? { details: { cloudflareObfuscated } } : {}),
         });
       }
     }
