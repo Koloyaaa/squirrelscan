@@ -703,6 +703,26 @@ The console, text, Markdown and HTML reports list each notice, without the `Not 
 
 ---
 
+### Source pages
+
+An item that is a resource found on pages, such as a broken link, lists those pages in `sourcePages`, each page once. `pageCount` is how many pages it was found on when `sourcePages` lists fewer, as in a published report. The link rules (`links/broken-links`, `links/broken-external-links`, `links/broken-anchors` and the `links-to-redirect` check of `links/redirect-chains`) add `sources`, one entry per page:
+
+```json
+{
+  "id": "https://example.com/old-page",
+  "label": "https://example.com/old-page (404), linked in the page content and the footer",
+  "sourcePages": ["https://example.com/about", "https://example.com/contact"],
+  "sources": [
+    { "page": "https://example.com/about", "links": 2, "sections": { "content": 2 } },
+    { "page": "https://example.com/contact", "links": 1, "sections": { "footer": 1 } }
+  ]
+}
+```
+
+`links` is how many of the page's links point at the item, and `sections` counts them by where they sit, using the section names in [link sections](/rules/links/broken-links#what-squirrel-checks); it is absent when no link on that page had a known section. The XML report writes each source page as `<page url="..." links="2">` with a `<section name="content" links="2"/>` per section. The HTML, Markdown, text, LLM and console reports print one row per page, `from: /about (2 links, in the page content)`, and the check's summary counts links and pages apart: `1 broken internal link(s) (4xx/5xx), found on 2 pages`. HTML shows the first three rows and expands the rest inside the item. Markdown, text and console show the first three and the LLM report the first five, then `+N more pages`.
+
+---
+
 ### Report detail
 
 The console, text, Markdown, HTML and LLM reports end with a Report detail section. It holds the notes about the audit itself, so the top of the report stays the title, URL, date, page count and version, then the score, the summary and the issues. It leaves out whatever it has nothing to say about, and is absent when it has nothing at all. In order, it has:

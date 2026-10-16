@@ -24,11 +24,26 @@ The rule is site-wide and compares link targets against pages the crawl actually
   - With more than one cause, `its internal link checks left them out (<counts>)`. `<counts>` lists, separated by `; `, one count for each cause that applies: `<count> past the limit of <limit> targets` (or `<count> because internal_links.max_targets is 0`), `<count> skipped as outside the crawl scope, disallowed by robots.txt, or action or token links` (`an action or token link` for one), `<count> not trusted, because the site answers HEAD requests with errors on pages it serves`, and `<count> with no answer`.
 
   `details.notFetched` carries the same counts (`off`, `overLimit`, `skipped`, `untrusted`, `noAnswer`, each present only when not zero), and they add up to `N`. It replaces the pass, and sits next to the failure when a target the crawl did fetch is broken. The report shows it as **Not checked**, and the score does not count it. Its advice suggests turning internal link checks back on only when they were off, and raising `internal_links.max_targets` only when the limit left targets out. When every unfetched target was skipped, it says that a Surface or Full audit, which follows links, can reach the ones inside the crawl scope and allowed by robots.txt.
-- `broken-links` fails when a target returned 400 or above. Message: `7 broken internal link(s) (4xx/5xx)`. Each item reads `https://example.com/old-page (404), linked in the footer` and lists every page that links to it. Severity error, weight 7.
+- `broken-links` fails when a target returned 400 or above. Message: `7 broken internal link(s) (4xx/5xx)`. Each item reads `https://example.com/old-page (404), linked in the footer` and lists every page that links to it, each page once, with how many of its links point at the target and where on that page they sit. Severity error, weight 7.
 - `broken-links` passes otherwise. Message: `No broken internal links detected`.
 - Cloudflare email-protection links are skipped. With Cloudflare's Email Address Obfuscation on, every `mailto:` link and every email address in a page's text becomes a link to `/cdn-cgi/l/email-protection`, and a script in the browser puts the address back. Requested directly, that path answers an error, but it is an email address, not a page. So it is never a link target: the crawl and the internal link check never request it, and the rule never reports it as broken. squirrel reads it as the `mailto:` link it stands for instead, so rules that look for contact links still see it. Other `/cdn-cgi/` links, such as Cloudflare image resizing URLs, are checked as usual.
 - `rate-limited-links` reports info for targets that returned a rate-limit status, to the crawl or to the internal link check. Message: `N internal link(s) rate-limited - status unverifiable`.
 - `refused-links` reports info for targets whose status cannot be verified: the internal link check got a 401 or 403, or the crawl got a bot-wall challenge. Message: `N internal link(s) <reason> - status unverifiable`, where the reason is `refused the link check (401/403)`, `answered the crawl with a bot-wall challenge`, or both joined with `or`. An item from a challenge carries `wafChallenge: true`.
+
+A broken link reads like this in the text report:
+
+```text
+[X] broken-links: 1 broken internal link(s) (4xx/5xx), found on 3 pages
+    -> /about
+    -> /contact
+    -> /pricing
+    -> https://example.com/old-page (404), linked in the page content and the footer
+        from: /about (2 links, in the page content)
+        from: /contact (in the footer)
+        from: /pricing
+```
+
+The summary counts links and pages apart, and the pages are listed once for the check, then once per broken link. A page that links the target twice is one row with `2 links`. A row says where that page's links sit when the section is known, and nothing when it is not. The other formats print the same rows: HTML shows the first three and expands the rest inside the item, Markdown, text and console show the first three and the LLM report the first five, then `+N more pages`. In the JSON and XML reports, the item's `sourcePages` lists each page once, and `sources` holds one entry per page with `links` and, when known, `sections`. `meta.linkedFrom` counts pages. See [source pages](/configuration/output#source-pages).
 
 Every `broken-links` row, whether it fails, passes or is not checked, carries the same `details` about what the audit covered:
 
