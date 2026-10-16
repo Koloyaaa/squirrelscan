@@ -2,6 +2,8 @@
 
 import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
 
+import { isCloudflareEmailProtectionUrl } from "@squirrelscan/utils";
+
 import {
   addSection,
   pageRegionsField,
@@ -47,8 +49,9 @@ export const httpsDowngradeRule: Rule = {
       const href = link.getAttribute("href");
       if (!href) continue;
 
-      // Check for explicit http:// links
-      if (href.startsWith("http://")) {
+      // Check for explicit http:// links. Cloudflare's email-protection link is a mailto in the
+      // browser, not a page, so its scheme is no downgrade (pub#811, pub#838).
+      if (href.startsWith("http://") && !isCloudflareEmailProtectionUrl(href)) {
         httpLinks.push(href);
       }
     }

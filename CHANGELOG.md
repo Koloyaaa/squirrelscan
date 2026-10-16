@@ -36,6 +36,7 @@ How it works:
 ### Fixed
 
 - The HTML, markdown and text reports now say how many items a check left out, not only how many they list. A published report keeps 5 items per issue, so an issue with 1,147 items used to read "5 items" there. It now reads "5 items, 1,142 more not listed" (the text format prints `... and 1,142 more items not listed` after the list). An issue the report keeps no items for at all, as on a very large site, says "1,500 items not listed" where it used to say nothing. The count comes from the check's `details.additional`, which the JSON and LLM formats already reported. A check with nothing left out reads as before. See [Output formats via URL](https://docs.squirrelscan.com/reports#output-formats-via-url).
+- Cloudflare email-protection links (`/cdn-cgi/l/email-protection`) are read as the email addresses they are in the rest of the audit too. `links/tel-mailto` counts each as a `mailto:` link and checks its decoded address like any other, never reporting one whose address cannot be decoded. `links/nofollow-internal` and `links/https-downgrade` no longer judge one as a page link. The crawl never queues one, whether a sitemap, a carried finding or a page cached before 0.0.116 names it. See [links/tel-mailto](https://docs.squirrelscan.com/rules/links/tel-mailto). #838
 
 ## v0.0.116 (2026-10-16)
 

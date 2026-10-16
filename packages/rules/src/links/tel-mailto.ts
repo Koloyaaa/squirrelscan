@@ -3,6 +3,7 @@
 import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
 import type { CheckItem } from "@squirrelscan/core-contracts";
 import { MAX_CONTACT_LINKS, makeLinkSectionResolver } from "@squirrelscan/parser";
+import { decodeCloudflareEmail, isCloudflareEmailProtectionUrl } from "@squirrelscan/utils";
 
 import {
   addSection,
@@ -12,6 +13,21 @@ import {
   withSection,
   type SectionCounts,
 } from "./link-section-label";
+
+/**
+ * The address a Cloudflare email-protection anchor stands for (pub#811): the link's `#<hex>`, or a
+ * `data-cfemail` on the anchor or inside it, decoded. "" when the payload is not an address.
+ */
+function obfuscatedAddress(anchor: Element, href: string): string {
+  const hash = href.indexOf("#");
+  const payload =
+    (hash >= 0 ? href.slice(hash + 1) : "") ||
+    anchor.getAttribute("data-cfemail") ||
+    anchor.querySelector("[data-cfemail]")?.getAttribute("data-cfemail") ||
+    "";
+  const decoded = decodeCloudflareEmail(payload.trim());
+  return decoded?.includes("@") ? decoded : "";
+}
 
 /** Digits-only phone number, for comparison (drops +, spaces, punctuation) */
 function normalizePhone(raw: string): string {
@@ -194,7 +210,13 @@ export const telMailtoRule: Rule = {
     };
 
     for (const link of links) {
-      const href = link.getAttribute("href") || "";
+      let href = link.getAttribute("href") || "";
+      // Cloudflare's email-protection link (`/cdn-cgi/l/email-protection#<hex>`) is a mailto to
+      // a browser (pub#811, pub#838): read it as one, with the decoded address when the payload
+      // decodes. An undecodable one stays a mailto with no address, counted but never judged
+      // invalid, since the address cannot be seen.
+      const obfuscated = isCloudflareEmailProtectionUrl(href);
+      if (obfuscated) href = `mailto:${obfuscatedAddress(link, href)}`;
 
       if (href.startsWith("tel:")) {
         telLinks.push(href);
@@ -254,13 +276,15 @@ export const telMailtoRule: Rule = {
         // present.
         const isShareLink = email === "" && href.includes("?");
         // Basic email validation
-        if (!isShareLink && (!email.includes("@") || !email.includes("."))) {
+        const hidden = obfuscated && email === "";
+        if (!isShareLink && !hidden && (!email.includes("@") || !email.includes("."))) {
           invalidMailto.push(href);
         }
 
-        // Check for href/text email mismatch
+        // Check for href/text email mismatch. An obfuscated link whose address did not decode
+        // has none to compare.
         const text = link.textContent?.trim() || "";
-        if (looksLikeEmail(text) && text.toLowerCase() !== email.toLowerCase()) {
+        if (!hidden && looksLikeEmail(text) && text.toLowerCase() !== email.toLowerCase()) {
           mailtoMismatches.push(
             placed(
               {
