@@ -203,9 +203,10 @@ describe("runStreamingRules — canonical 518-page v1↔v2 merge gate", () => {
       // 303 -> 305 security/security-txt and security/version-disclosure,
       // 305 -> 306 mobile/web-app-manifest,
       // 306 -> 307 reliability/broken-forms,
-      // 307 -> 308 content/common-misspellings;
+      // 307 -> 308 content/common-misspellings,
+      // 308 -> 309 mobile/input-zoom;
       // anything else means a rule id leaked in, so fix that rather than this number.
-      expect(v1.perRuleTally.length).toBe(308);
+      expect(v1.perRuleTally.length).toBe(309);
       expect(v1.perRuleTally.find((t) => t.ruleId === "reliability/broken-forms")).toEqual({
         ruleId: "reliability/broken-forms",
         pass: 0,

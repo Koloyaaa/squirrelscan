@@ -449,7 +449,7 @@ export function parseDeclarations(css: string): Declarations {
 }
 
 /** One style rule lifted out of a sheet, with whether an at-rule encloses it. */
-interface RawRule {
+export interface RawRule {
   selector: string;
   body: string;
   /**
@@ -473,7 +473,7 @@ interface RawRule {
  * browser tokenizes them, so a `{`, `}` or `;` inside one is not structure:
  * `.a{background:url(}.b{display:none}.c{)}` declares no `.b` rule (pub#679).
  */
-function parseRules(css: string, maxRules: number): RawRule[] {
+export function parseRules(css: string, maxRules: number): RawRule[] {
   const rules: RawRule[] = [];
   let i = 0;
   let preludeStart = 0;
