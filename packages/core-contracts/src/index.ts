@@ -1002,7 +1002,6 @@ export interface CrawlerPageFetchedEvent {
   sizeBytes: number;
   depth: number;
   fetcherId?: string;
-  rendered?: boolean;
   timestamp: number;
   /** Browser render cost only, set only for browser-queue-rendered pages (#826). */
   renderTimeMs?: number;
