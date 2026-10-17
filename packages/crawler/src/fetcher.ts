@@ -16,8 +16,13 @@ import {
   classifyFetchErrorCode,
   fetchErrorCode,
 } from "@squirrelscan/core-contracts/failure-reason";
-import { CHROME_SEC_CH_UA } from "@squirrelscan/utils/constants";
-import { headersForRedirect } from "@squirrelscan/utils/headers";
+import {
+  CHROME_SEC_CH_UA,
+  TECH_DETECT_HEADER_MAX_CHARS,
+  TECH_DETECT_HEADER_NAMES,
+  TECH_DETECT_PRESENCE_HEADERS,
+} from "@squirrelscan/utils/constants";
+import { headersForRedirect, techCookieNames } from "@squirrelscan/utils/headers";
 import { isHttpOrHttpsUrl } from "@squirrelscan/utils/safe-fetch";
 import {
   DEFAULT_MAX_DOCUMENT_BODY_BYTES,
@@ -635,7 +640,32 @@ function extractResponseHeaders(headers: Headers): ResponseHeaders {
     xAspNetMvcVersion: headers.get("x-aspnetmvc-version"),
     xGenerator: headers.get("x-generator"),
     setCookie: setCookies.length > 0 ? setCookies.join("\n") : null,
+    techHeaders: extractTechHeaders(headers, setCookies),
   };
+}
+
+/**
+ * The headers technology detection reads, kept so a local audit can detect
+ * from the stored page (pub#871). Only listed names, each value capped, so a
+ * page record cannot grow with whatever a server sends. A header detection
+ * only tests for presence keeps "1", and Set-Cookie keeps its cookie names
+ * (`name=`, one per line), so no token or session value is kept here.
+ */
+function extractTechHeaders(headers: Headers, setCookies: string[]): Record<string, string> | null {
+  const out: Record<string, string> = {};
+  let any = false;
+  for (const name of TECH_DETECT_HEADER_NAMES) {
+    const value = headers.get(name);
+    if (value === null) continue;
+    out[name] = TECH_DETECT_PRESENCE_HEADERS.has(name) ? "1" : value.slice(0, TECH_DETECT_HEADER_MAX_CHARS);
+    any = true;
+  }
+  const cookieNames = techCookieNames(setCookies);
+  if (cookieNames) {
+    out["set-cookie"] = cookieNames;
+    any = true;
+  }
+  return any ? out : null;
 }
 
 function extractSecurityHeaders(headers: Headers): SecurityHeaders {

@@ -1,3 +1,9 @@
+import {
+  TECH_DETECT_HEADER_MAX_CHARS,
+  TECH_DETECT_HEADER_NAMES,
+  TECH_DETECT_MAX_COOKIE_NAMES,
+} from "./constants";
+
 // Shared validation for user-supplied HTTP request headers (#494, #532).
 // These values are replayed onto outbound crawl/render requests, so a CR/LF/NUL
 // in a value would enable header injection / request splitting — reject them.
@@ -49,6 +55,45 @@ export function headersForRedirect(
     }
   }
   return result;
+}
+
+/**
+ * Lays the headers the crawler kept for technology detection (pub#871) over a
+ * header map built from a stored page. A record that carries them, even as
+ * null (none sent), speaks for every header detection reads: one the response
+ * stopped sending is dropped from the map, so an older curated value a reused
+ * record still holds cannot bring a removed technology back. A record stored
+ * before they existed (undefined) leaves the map as it is. `map` is changed in
+ * place and returned: pass a map built for the call.
+ */
+export function overlayTechHeaders(
+  map: Record<string, string>,
+  techHeaders: Record<string, string> | null | undefined,
+): Record<string, string> {
+  if (techHeaders === undefined) return map;
+  for (const name of TECH_DETECT_HEADER_NAMES) delete map[name];
+  delete map["set-cookie"];
+  return Object.assign(map, techHeaders);
+}
+
+/**
+ * The names of the cookies some Set-Cookie values set, as technology
+ * detection reads them: `name=`, one per line, null for none (pub#871). A
+ * name ends at the first `=` or `;`, so an attribute never joins it. Names
+ * are kept whole, at most TECH_DETECT_MAX_COOKIE_NAMES of them, and a name
+ * over TECH_DETECT_HEADER_MAX_CHARS is left out rather than cut.
+ */
+export function techCookieNames(setCookies: Iterable<string>): string | null {
+  const names: string[] = [];
+  for (const cookie of setCookies) {
+    const name = /^[^=;]*/.exec(cookie)?.[0]?.trim() ?? "";
+    if (name === "" || name.length > TECH_DETECT_HEADER_MAX_CHARS || names.includes(`${name}=`)) {
+      continue;
+    }
+    names.push(`${name}=`);
+    if (names.length === TECH_DETECT_MAX_COOKIE_NAMES) break;
+  }
+  return names.length > 0 ? names.join("\n") : null;
 }
 
 // A DocumentFetcher's `headers["set-cookie"]` is "\n"-joined, one real
