@@ -54,25 +54,39 @@ function ownSection(element: Element): LinkSection | null {
 /** Make a section resolver for one document; call it for every anchor of that document. */
 export function makeSectionResolver(): (element: Element) => LinkSection {
   const memo = new WeakMap<Element, LinkSection>();
-  const resolve = (element: Element): LinkSection => {
+  return (element: Element): LinkSection => {
     const cached = memo.get(element);
     if (cached) return cached;
-    const parent = element.parentElement;
-    const inherited: LinkSection = parent ? resolve(parent) : "unknown";
-    let section = inherited;
-    if (!CHROME.has(inherited)) {
-      const own = ownSection(element);
-      if (own) {
-        // A <header>/<footer> inside <main>/<article> or a comment is that block's own heading,
-        // not the site's banner or contentinfo (HTML spec: they only scope to sectioning content).
-        const scoped = (own === "header" || own === "footer") && inherited !== "unknown";
-        if (!scoped) section = own;
+    // Climb to the nearest ancestor already resolved, or past the root, in a loop: a page can nest
+    // hundreds of thousands of elements, and one stack frame per level would overflow the stack.
+    const chain: Element[] = [];
+    let inherited: LinkSection = "unknown";
+    for (let node: Element | null = element; node; node = node.parentElement) {
+      const known = memo.get(node);
+      if (known) {
+        inherited = known;
+        break;
       }
+      chain.push(node);
     }
-    memo.set(element, section);
-    return section;
+    // Then fold back down, outermost first, so each element reads its parent's answer.
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const node = chain[i]!;
+      let section = inherited;
+      if (!CHROME.has(inherited)) {
+        const own = ownSection(node);
+        if (own) {
+          // A <header>/<footer> inside <main>/<article> or a comment is that block's own heading,
+          // not the site's banner or contentinfo (HTML spec: they only scope to sectioning content).
+          const scoped = (own === "header" || own === "footer") && inherited !== "unknown";
+          if (!scoped) section = own;
+        }
+      }
+      memo.set(node, section);
+      inherited = section;
+    }
+    return inherited;
   };
-  return resolve;
 }
 
 /** One-off convenience; use {@link makeSectionResolver} when resolving many anchors of a page. */
