@@ -56,7 +56,14 @@ describe("[rules] time_budget_ms (#578)", () => {
     expect(performance.now() - started).toBeLessThan(4_000);
     const err = checks.find((c) => c.name === "test/spin-error");
     expect(err?.message).toContain("exceeded its 50 ms time budget");
-    expect(err?.details).toEqual({ timedOut: true, budgetMs: 50, pages: 1 });
+    expect(err?.status).toBe("skipped");
+    expect(err?.details).toEqual({
+      timedOut: true,
+      ruleId: "test/spin",
+      budgetMs: 50,
+      elapsedMs: expect.any(Number),
+      pages: 1,
+    });
   });
 
   test("0 turns the budget off: a rule slower than the default still finishes", async () => {
