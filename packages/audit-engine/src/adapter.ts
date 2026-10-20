@@ -133,6 +133,7 @@ import { detachFromPage, detachParsedPage } from "./detach";
 import { resolveCloakingProbes } from "./cloaking-probe";
 import { createSiteQuery } from "./site-query";
 import { confirmSoft404Candidates } from "./soft404-confirm";
+import { createHeaderScope, headersWithheldFrom } from "./lib/header-scope";
 import {
   CHROME_USER_AGENT,
   RESOURCE_SIZE_LIMITS,
@@ -1089,6 +1090,15 @@ export function fetchAssetsFromOccurrences(
       trustTarget: (url) => inCrawlHostScope(url.href),
     };
 
+    // The custom headers go to the audited origin and the hosts the user named,
+    // not to every subdomain (#732).
+    const headerScope = createHeaderScope(baseUrl, config.crawler?.header_hosts ?? []);
+    // Either the request or the redirect it ended on was sent without them.
+    const withheld = (url: string, status: number | null, finalUrl?: string | null): boolean =>
+      (status === 401 || status === 403) &&
+      (headersWithheldFrom(url, config.crawler?.headers, headerScope) ||
+        (finalUrl != null && headersWithheldFrom(finalUrl, config.crawler?.headers, headerScope)));
+
     const resourceCheckOptions = {
       concurrency: config.external_links?.concurrency ?? RESOURCE_SIZE_LIMITS.CHECK_CONCURRENCY,
       timeoutMs:
@@ -1105,7 +1115,7 @@ export function fetchAssetsFromOccurrences(
       // the site's own: every pool on these options is same-site, and the
       // sitemap pool sends a URL on another host without them (below).
       ...(config.crawler?.headers && Object.keys(config.crawler.headers).length > 0
-        ? { customHeaders: config.crawler.headers }
+        ? { customHeaders: config.crawler.headers, headerScope }
         : {}),
       ...(fetchBudget ? { budget: fetchBudget } : {}),
       egress: ownSiteEgress,
@@ -1118,7 +1128,7 @@ export function fetchAssetsFromOccurrences(
         ? { timeoutMs: overrides.resourceCheckTimeoutMs }
         : {}),
       ...(config.crawler?.headers && Object.keys(config.crawler.headers).length > 0
-        ? { customHeaders: config.crawler.headers }
+        ? { customHeaders: config.crawler.headers, headerScope }
         : {}),
       ...(fetchBudget ? { budget: fetchBudget } : {}),
       egress: ownSiteEgress,
@@ -1436,6 +1446,7 @@ export function fetchAssetsFromOccurrences(
           sourcePages: Array.from(resourceOccurrences.css.get(check.url) ?? []),
           rateLimited: check.rateLimited,
           wafBlocked: check.wafBlocked,
+          ...(withheld(check.url, check.status, check.redirectTarget) ? { headersWithheld: true } : {}),
           contentEncoding: check.contentEncoding,
           transferBytes: check.transferBytes,
           cacheControl: check.cacheControl,
@@ -1473,6 +1484,7 @@ export function fetchAssetsFromOccurrences(
           sourcePages: Array.from(resourceOccurrences.fonts.get(check.url) ?? []),
           rateLimited: check.rateLimited,
           wafBlocked: check.wafBlocked,
+          ...(withheld(check.url, check.status, check.redirectTarget) ? { headersWithheld: true } : {}),
         })),
       },
       // Absent, not empty, when the rule is off: nothing was measured.
@@ -1520,6 +1532,7 @@ export function fetchAssetsFromOccurrences(
         sourcePages: Array.from(resourceOccurrences.scripts.get(fetch.url) ?? []),
         rateLimited: fetch.rateLimited,
         wafBlocked: fetch.wafBlocked,
+        ...(withheld(fetch.url, fetch.status, fetch.finalUrl) ? { headersWithheld: true } : {}),
         redirected: fetch.redirected,
         finalUrl: fetch.finalUrl,
         sourceMapHeader: fetch.sourceMapHeader,
@@ -2043,6 +2056,7 @@ export function runRulesOnStorage(
         {
           defaultUserAgent: config.crawler?.user_agent || CHROME_USER_AGENT,
           customHeaders: config.crawler?.headers,
+          egress: probeEgress(crawl?.baseUrl ?? "", config),
         },
       ),
     );
@@ -2073,6 +2087,7 @@ export function runRulesOnStorage(
           // confirmation request is UA-equivalent to the crawl (#1177).
           userAgent: crawl?.config?.userAgent || config.crawler?.user_agent || CHROME_USER_AGENT,
           customHeaders: config.crawler?.headers,
+          egress: probeEgress(crawl?.baseUrl ?? "", config),
           // Honor the crawl's per-host politeness delay between same-host confirms.
           perHostDelayMs: config.crawler?.per_host_delay_ms,
         },
@@ -2673,6 +2688,7 @@ function buildStreamingSiteData(
   pageDataMap: ParsedUniverse["pageDataMap"],
   totalPageCount: number,
   fetchedTargets: ParsedUniverse["fetchedTargets"],
+  egressPinnedByTransport?: boolean,
 ): Effect.Effect<
   {
     siteDataForPageRules: SiteData;
@@ -2850,6 +2866,7 @@ function buildStreamingSiteData(
         {
           defaultUserAgent: config.crawler?.user_agent || CHROME_USER_AGENT,
           customHeaders: config.crawler?.headers,
+          egress: probeEgress(crawl?.baseUrl ?? "", config, egressPinnedByTransport),
         },
       ),
     );
@@ -2871,6 +2888,7 @@ function buildStreamingSiteData(
           wallBudgetMs: config.integrity?.soft404_confirm?.budget_ms,
           userAgent: crawl?.config?.userAgent || config.crawler?.user_agent || CHROME_USER_AGENT,
           customHeaders: config.crawler?.headers,
+          egress: probeEgress(crawl?.baseUrl ?? "", config, egressPinnedByTransport),
           perHostDelayMs: config.crawler?.per_host_delay_ms,
         },
       ).catch((): undefined => undefined),
@@ -3229,6 +3247,13 @@ export function runStreamingRules(
      */
     pageSink?: PageResultSink;
     /**
+     * The transport resolves once and connects to the address it validated (the
+     * hosted container's egress proxy), so the soft-404 and cloaking probes do
+     * not pin their own hops (#2831). Same meaning as
+     * `ResourceCheckOverrides.egressPinnedByTransport`.
+     */
+    egressPinnedByTransport?: boolean;
+    /**
      * Keep the O(pages × page bytes) result maps. Default TRUE (today's
      * behaviour, and what the cloud path runs on).
      *
@@ -3281,6 +3306,7 @@ export function runStreamingRules(
         pageDataMap,
         totalPageCount,
         fetchedTargets,
+        opts?.egressPinnedByTransport,
       ),
     );
 
@@ -3644,6 +3670,37 @@ function nofollowActionTargets(page: {
     }
   }
   return out;
+}
+
+/**
+ * The egress policy for the end-of-crawl probes (#2831), the same as the asset
+ * phase's own-site pool (#2764): private networks allowed (a LAN audit),
+ * link-local and metadata addresses refused, the hosts the crawl itself
+ * requests sent as the crawl sends them, every other hop vetted.
+ */
+function probeEgress(
+  baseUrl: string,
+  config: Config,
+  egressPinnedByTransport?: boolean,
+): EgressPolicy {
+  return {
+    allowPrivateNetwork: true,
+    resolve: memoizeResolveHost(resolveHostAddresses),
+    pin: egressPinnedByTransport !== true,
+    trustTarget: (url) => {
+      if (!baseUrl) return false;
+      try {
+        return isInScope(url.href, {
+          baseUrl,
+          include: [],
+          exclude: [],
+          allowedDomains: config.project?.domains ?? [],
+        }).allowed;
+      } catch {
+        return false;
+      }
+    },
+  };
 }
 
 /**
