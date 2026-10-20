@@ -80,7 +80,16 @@ export function siteRuleBudgetMs(
 
 /** Thrown when a rule's synchronous work runs past its budget. */
 export class RuleTimeoutError extends Error {
-  constructor(readonly budgetMs: number) {
+  /**
+   * `elapsedMs` is the wall-clock time the call ran before the watchdog stopped
+   * it (pub#960): over `budgetMs` by however long the host took to interrupt it,
+   * and what tells a rule that is slow from a host that is starved. Unset when a
+   * caller builds one without a measurement.
+   */
+  constructor(
+    readonly budgetMs: number,
+    readonly elapsedMs?: number
+  ) {
     super(`exceeded its ${budgetMs} ms time budget and was abandoned`);
     this.name = "RuleTimeoutError";
   }
@@ -125,6 +134,7 @@ export function runWithinBudget<T>(fn: () => T, budgetMs: number): T {
   if (active) return fn();
   active = true;
   slot.fn = fn;
+  const started = performance.now();
   try {
     return callSlot.runInContext(context, { timeout: Math.ceil(budgetMs) }) as T;
   } catch (e) {
@@ -132,7 +142,7 @@ export function runWithinBudget<T>(fn: () => T, budgetMs: number): T {
       // The rule stopped at an arbitrary point, possibly mid `exec()` loop on a
       // shared `/g` or `/y` regex whose `lastIndex` would carry into the next rule.
       resetSharedRegexes();
-      throw new RuleTimeoutError(budgetMs);
+      throw new RuleTimeoutError(budgetMs, Math.round(performance.now() - started));
     }
     throw e;
   } finally {

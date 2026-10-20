@@ -839,4 +839,20 @@ describe("an unconfirmed row counts as its base check evaluated (pub#935)", () =
     const legacy = buildResolutionSignal(rules, [P1, P2, P3])!;
     expect(new Set(legacy.notEvaluated?.[KEY] ?? [])).toEqual(new Set([h(P3)]));
   });
+
+  test("a rule-timed-out page is not evaluated: a prior finding on it carries (pub#960)", () => {
+    const timedOut: CheckResult = {
+      name: "a11y/r-error",
+      status: "skipped",
+      message: "Rule not evaluated: exceeded its 1000 ms time budget and was abandoned",
+      skipReason: "rule-timed-out",
+      pageUrl: P3,
+      details: { timedOut: true, budgetMs: 1000, pages: 1 },
+    };
+    const rules: Rules = { "a11y/r": { checks: [row("c", P1, "fail"), row("c", P2, "pass"), timedOut] } };
+    const legacy = buildResolutionSignal(rules, [P1, P2, P3])!;
+    // P3 is neither failing nor evaluated for `c`, so the merge carries it.
+    expect(new Set(legacy.notEvaluated?.[KEY] ?? [])).toEqual(new Set([h(P3)]));
+    expect(new Set(legacy.failing[KEY])).toEqual(new Set([h(P1)]));
+  });
 });
