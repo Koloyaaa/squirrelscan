@@ -149,7 +149,15 @@ describe("per-rule time budget", () => {
       expect(err!.status).toBe("skipped");
       expect(err!.skipReason).toBe("rule-timed-out");
       expect(err!.message).toContain(`exceeded its ${RULE_TIME_BUDGET_MS} ms time budget`);
-      expect(err!.details).toEqual({ timedOut: true, budgetMs: RULE_TIME_BUDGET_MS, pages: 1 });
+      expect(err!.details).toEqual({
+        timedOut: true,
+        ruleId: "test/redos",
+        budgetMs: RULE_TIME_BUDGET_MS,
+        elapsedMs: expect.any(Number),
+        pages: 1,
+      });
+      // Observed, and at least the budget it overran (pub#960).
+      expect((err!.details as { elapsedMs: number }).elapsedMs).toBeGreaterThanOrEqual(RULE_TIME_BUDGET_MS - 5);
       expect(byName(pageResult.checks, "test/redos")).toBeUndefined();
       expect(pageResult.ruleResults.get("test/redos")?.checks).toEqual([err!]);
 
@@ -208,7 +216,13 @@ describe("per-rule time budget", () => {
     );
     const { checks } = await runner.runPageRules(redosPage());
     expect(checks.map((c) => c.name)).toEqual(["test/swallow-error"]);
-    expect(checks[0].details).toEqual({ timedOut: true, budgetMs: 100, pages: 1 });
+    expect(checks[0].details).toEqual({
+      timedOut: true,
+      ruleId: "test/swallow",
+      budgetMs: 100,
+      elapsedMs: expect.any(Number),
+      pages: 1,
+    });
   }, 30_000);
 
   test("a site rule's budget scales with the site's page count", async () => {
@@ -340,7 +354,9 @@ describe("per-rule time budget", () => {
     // ...so the total is its own check, in the site results.
     const { checks } = await runner.runSiteRules(siteData(3));
     const summary = byName(checks, "test/slow-sec-timeouts");
-    expect(summary?.details).toMatchObject({ timedOut: true, budgetMs: 50, pagesNotChecked: 3 });
+    expect(summary?.details).toMatchObject({ timedOut: true, ruleId: "test/slow-sec", budgetMs: 50, pagesNotChecked: 3 });
+    // The longest observed run, for telling a slow rule from a starved host (pub#960).
+    expect((summary?.details as { maxElapsedMs: number }).maxElapsedMs).toBeGreaterThanOrEqual(45);
     expect(summary?.message).toContain("3 pages not checked");
     expect(summary?.message).toContain("did not check those pages");
   }, 30_000);
@@ -419,7 +435,7 @@ describe("page-time collectors run under the budget", () => {
         { ...emptySignal("https://example.com/a") },
         {
           ...emptySignal("https://example.com/b"),
-          timedOut: { budgetMs: 1000, ruleIds: ["test/collected", "test/gated"] },
+          timedOut: { budgetMs: 1000, ruleIds: ["test/collected", "test/gated"], elapsedMs: { "test/collected": 1234, "test/gated": 1100 } },
         },
       ],
     };
@@ -440,12 +456,12 @@ describe("page-time collectors run under the budget", () => {
         message: "Rule not evaluated: exceeded its 1000 ms time budget and was abandoned",
         skipReason: "rule-timed-out",
         pageUrl: "https://example.com/b",
-        details: { timedOut: true, budgetMs: 1000 },
+        details: { timedOut: true, ruleId: "test/collected", budgetMs: 1000, elapsedMs: 1234 },
       },
       expect.objectContaining({
         name: "test/collected-timeouts",
         status: "info",
-        details: { timedOut: true, budgetMs: 1000, pagesNotChecked: 1 },
+        details: { timedOut: true, ruleId: "test/collected", budgetMs: 1000, pagesNotChecked: 1, maxElapsedMs: 1234 },
       }),
     ]);
     expect(ruleResults.get("test/other")?.checks).toHaveLength(1);
@@ -454,9 +470,12 @@ describe("page-time collectors run under the budget", () => {
   });
 
   test("a collector timing out on many pages is a skipped check on each page, and one summary", async () => {
-    const timedOut = { budgetMs: 1000, ruleIds: ["test/collected"] };
+    const elapsed = { a: 1200, b: 1500, c: 1100 };
     const collected: CollectedSiteSignals = {
-      pages: ["a", "b", "c"].map((p) => ({ ...emptySignal(`https://example.com/${p}`), timedOut })),
+      pages: (["a", "b", "c"] as const).map((p) => ({
+        ...emptySignal(`https://example.com/${p}`),
+        timedOut: { budgetMs: 1000, ruleIds: ["test/collected"], elapsedMs: { "test/collected": elapsed[p] } },
+      })),
     };
     const runner = makeRunner([rule("test/collected", "site", () => pass("test/collected"))]);
     const { ruleResults } = await runner.runSiteRules(siteData(3), undefined, collected);
@@ -469,7 +488,10 @@ describe("page-time collectors run under the budget", () => {
     ]);
     expect(checks.some((c) => c.status === "fail")).toBe(false);
     expect(checks.filter((c) => c.name === "test/collected-timeouts")).toEqual([
-      expect.objectContaining({ status: "info", details: { timedOut: true, budgetMs: 1000, pagesNotChecked: 3 } }),
+      expect.objectContaining({
+        status: "info",
+        details: { timedOut: true, ruleId: "test/collected", budgetMs: 1000, pagesNotChecked: 3, maxElapsedMs: 1500 },
+      }),
     ]);
   });
 
@@ -529,6 +551,7 @@ describe("page-time collectors run under the budget", () => {
     const signal = buildCollectedPageSignal({ url, parsed, budgetMs: 1 });
     expect(signal.timedOut?.budgetMs).toBe(1);
     expect(signal.timedOut?.ruleIds).toContain("security/leaked-secrets");
+    expect(signal.timedOut?.elapsedMs?.["security/leaked-secrets"]).toBeGreaterThanOrEqual(0);
     expect(signal.secrets).toEqual([]);
 
     const fine = buildCollectedPageSignal({

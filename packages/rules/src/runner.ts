@@ -277,7 +277,7 @@ export class RuleRunner {
   // `runSiteRules` as one `<rule>-timeouts` summary check.
   private readonly timedOutPageRules = new Map<
     string,
-    { details: { pages: number }; name: string; category: string; budgetMs: number }
+    { details: { pages: number }; name: string; category: string; budgetMs: number; maxElapsedMs?: number }
   >();
   // Per-run state — captured once at construction, immutable for the
   // lifetime of this runner instance. Each audit gets its own RuleRunner, so
@@ -520,33 +520,43 @@ export class RuleRunner {
           ruleId: rule.meta.id,
           ...(scopeForLog ? { scope: scopeForLog } : { pageUrl: ctx.page.url }),
           budgetMs: e.budgetMs,
+          elapsedMs: e.elapsedMs,
         });
         // Not evaluated, never a finding (pub#960): the rule did not finish, so it
         // found nothing there, and a skipped check is excluded from the score and
         // the tallies and is not evidence for resolving a carried finding. Every
         // page gets the same status, the first one included.
         const name = `${rule.meta.id}-error`;
+        // `elapsedMs` is diagnostic only (pub#960): nothing scores or tallies it.
+        const timeoutDetails = {
+          timedOut: true,
+          ruleId: rule.meta.id,
+          budgetMs: e.budgetMs,
+          ...(e.elapsedMs !== undefined ? { elapsedMs: e.elapsedMs } : {}),
+        };
         const earlier = scopeForLog ? undefined : this.timedOutPageRules.get(rule.meta.id);
         if (earlier) {
           earlier.details.pages++;
+          earlier.maxElapsedMs = Math.max(earlier.maxElapsedMs ?? 0, e.elapsedMs ?? 0) || undefined;
           return [
             {
               name,
               status: "skipped",
               message: `Rule not evaluated: ${e.message} (already reported for this audit)`,
               skipReason: RULE_TIMED_OUT_SKIP_REASON,
-              details: { timedOut: true, budgetMs: e.budgetMs, pages: earlier.details.pages },
+              details: { ...timeoutDetails, pages: earlier.details.pages },
             },
           ];
         }
         // `pages` is updated in place as later pages time out too.
-        const details = { timedOut: true, budgetMs: e.budgetMs, pages: 1 };
+        const details = { ...timeoutDetails, pages: 1 };
         if (!scopeForLog) {
           this.timedOutPageRules.set(rule.meta.id, {
             details,
             name: rule.meta.name,
             category: rule.meta.category,
             budgetMs: e.budgetMs,
+            maxElapsedMs: e.elapsedMs,
           });
         }
         return [
@@ -782,7 +792,14 @@ export class RuleRunner {
               checks: [
                 ...result.checks,
                 ...timeouts,
-                timeoutSummaryCheck(meta.id, meta.name, meta.category, budgetMs, timeouts.length),
+                timeoutSummaryCheck(
+                  meta.id,
+                  meta.name,
+                  meta.category,
+                  budgetMs,
+                  timeouts.length,
+                  Math.max(0, ...timeouts.map((c) => (c.details as { elapsedMs?: number } | undefined)?.elapsedMs ?? 0))
+                ),
               ],
             };
           }
@@ -813,7 +830,7 @@ export class RuleRunner {
 
   private timeoutSummaryChecks(): CheckResult[] {
     return [...this.timedOutPageRules].map(([ruleId, t]) =>
-      timeoutSummaryCheck(ruleId, t.name, t.category, t.budgetMs, t.details.pages)
+      timeoutSummaryCheck(ruleId, t.name, t.category, t.budgetMs, t.details.pages, t.maxElapsedMs)
     );
   }
 }
@@ -828,7 +845,8 @@ function timeoutSummaryCheck(
   name: string,
   category: string,
   budgetMs: number,
-  pages: number
+  pages: number,
+  maxElapsedMs?: number
 ): CheckResult {
   const unchecked = `${pages} page${pages === 1 ? "" : "s"} not checked`;
   return {
@@ -838,7 +856,13 @@ function timeoutSummaryCheck(
       category === "security"
         ? `${name}: ${unchecked} because it exceeded its ${budgetMs} ms time budget. A timed-out security rule did not check those pages, so no finding there is not a clean result`
         : `${name}: ${unchecked} because it exceeded its ${budgetMs} ms time budget`,
-    details: { timedOut: true, budgetMs, pagesNotChecked: pages },
+    details: {
+      timedOut: true,
+      ruleId,
+      budgetMs,
+      pagesNotChecked: pages,
+      ...(maxElapsedMs ? { maxElapsedMs } : {}),
+    },
   };
 }
 
@@ -852,7 +876,7 @@ function collectedTimeoutChecks(
   const byRule = new Map<string, CheckResult[]>();
   for (const page of collected?.pages ?? []) {
     if (!page.timedOut) continue;
-    const { budgetMs, ruleIds } = page.timedOut;
+    const { budgetMs, ruleIds, elapsedMs } = page.timedOut;
     for (const ruleId of ruleIds) {
       let checks = byRule.get(ruleId);
       if (!checks) {
@@ -865,7 +889,12 @@ function collectedTimeoutChecks(
         message: `Rule not evaluated: ${new RuleTimeoutError(budgetMs).message}`,
         skipReason: RULE_TIMED_OUT_SKIP_REASON,
         pageUrl: page.url,
-        details: { timedOut: true, budgetMs },
+        details: {
+          timedOut: true,
+          ruleId,
+          budgetMs,
+          ...(elapsedMs?.[ruleId] !== undefined ? { elapsedMs: elapsedMs[ruleId] } : {}),
+        },
       });
     }
   }
