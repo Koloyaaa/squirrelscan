@@ -145,7 +145,9 @@ describe("per-rule time budget", () => {
 
       const err = byName(pageResult.checks, "test/redos-error");
       expect(err).toBeDefined();
-      expect(err!.status).toBe("fail");
+      // Not evaluated, never a failed finding (pub#960).
+      expect(err!.status).toBe("skipped");
+      expect(err!.skipReason).toBe("rule-timed-out");
       expect(err!.message).toContain(`exceeded its ${RULE_TIME_BUDGET_MS} ms time budget`);
       expect(err!.details).toEqual({ timedOut: true, budgetMs: RULE_TIME_BUDGET_MS, pages: 1 });
       expect(byName(pageResult.checks, "test/redos")).toBeUndefined();
@@ -181,7 +183,7 @@ describe("per-rule time budget", () => {
     const elapsedMs = performance.now() - started;
 
     const timeout = byName(checks, "test/backtrack-error");
-    expect(timeout?.status).toBe("fail");
+    expect(timeout?.status).toBe("skipped");
     expect(timeout?.details).toMatchObject({ timedOut: true, budgetMs: 200 });
     expect(byName(checks, "test/after-backtrack")?.status).toBe("pass");
     // Unbounded this is 20+ s; bounded it is the budget plus about one runaway match.
@@ -276,7 +278,7 @@ describe("per-rule time budget", () => {
     expect(runWithinBudget(() => "next", 1000)).toBe("next");
   });
 
-  test("a rule that times out on many pages is one fail, then skipped checks", async () => {
+  test("a rule that times out on many pages is a skipped check on every page, the first included", async () => {
     const slow = rule("test/slow-page", "page", () => {
       const until = performance.now() + 150;
       while (performance.now() < until) {
@@ -292,9 +294,10 @@ describe("per-rule time budget", () => {
       );
     }
     const all = results.flat();
-    expect(all.map((c) => c.status)).toEqual(["fail", "skipped", "skipped"]);
+    expect(all.map((c) => c.status)).toEqual(["skipped", "skipped", "skipped"]);
     expect(all.every((c) => c.name === "test/slow-page-error" && c.details?.["timedOut"] === true)).toBe(true);
-    // The one fail carries the running count of pages.
+    expect(all.every((c) => c.skipReason === "rule-timed-out")).toBe(true);
+    // The first check carries the running count of pages.
     expect(all[0].details?.["pages"]).toBe(3);
   }, 30_000);
 
@@ -342,7 +345,7 @@ describe("per-rule time budget", () => {
     expect(summary?.message).toContain("did not check those pages");
   }, 30_000);
 
-  test("two audits on one runner each get their own fail", async () => {
+  test("two audits on one runner each count their own pages", async () => {
     const slow = rule("test/slow-twice", "page", () => {
       const until = performance.now() + 150;
       while (performance.now() < until) {
@@ -351,22 +354,24 @@ describe("per-rule time budget", () => {
       return pass("test/slow-twice");
     });
     const runner = makeRunner([slow], 50);
-    const auditStatuses = async (urls: string[]) => {
-      const statuses: string[] = [];
+    // Every page is skipped; the count on the audit's first check is what moves.
+    const firstCheck = async (urls: string[]) => {
+      let first: { status: string; pages: unknown } | undefined;
       for (const url of urls) {
         const { checks } = await runner.runPageRules({ ...redosPage(), url }, siteData());
-        statuses.push(checks[0].status);
+        expect(checks[0].status).toBe("skipped");
+        first ??= { status: checks[0].status, pages: checks[0].details };
       }
-      return statuses;
+      return first!.pages as { pages: number };
     };
 
-    expect(await auditStatuses(["https://example.com/1", "https://example.com/2"])).toEqual(["fail", "skipped"]);
+    expect((await firstCheck(["https://example.com/1", "https://example.com/2"])).pages).toBe(2);
     // runSiteRules ends an audit...
     await runner.runSiteRules(siteData());
-    expect(await auditStatuses(["https://example.com/3"])).toEqual(["fail"]);
+    expect((await firstCheck(["https://example.com/3"])).pages).toBe(1);
     // ...and resetAudit() is the explicit hook.
     runner.resetAudit();
-    expect(await auditStatuses(["https://example.com/4"])).toEqual(["fail"]);
+    expect((await firstCheck(["https://example.com/4"])).pages).toBe(1);
   }, 30_000);
 
   test("thrown errors and fast rules are unchanged", async () => {
@@ -431,29 +436,59 @@ describe("page-time collectors run under the budget", () => {
       { name: "test/collected", status: "pass", message: "ok" },
       {
         name: "test/collected-error",
-        status: "fail",
-        message: "Rule error: exceeded its 1000 ms time budget and was abandoned",
+        status: "skipped",
+        message: "Rule not evaluated: exceeded its 1000 ms time budget and was abandoned",
+        skipReason: "rule-timed-out",
         pageUrl: "https://example.com/b",
-        details: { timedOut: true, budgetMs: 1000, pages: 1 },
+        details: { timedOut: true, budgetMs: 1000 },
       },
+      expect.objectContaining({
+        name: "test/collected-timeouts",
+        status: "info",
+        details: { timedOut: true, budgetMs: 1000, pagesNotChecked: 1 },
+      }),
     ]);
     expect(ruleResults.get("test/other")?.checks).toHaveLength(1);
     expect(ruleResults.get("test/gated")?.checks).toHaveLength(1);
-    expect(checks).toHaveLength(4);
+    expect(checks).toHaveLength(5);
   });
 
-  test("a collector timing out on many pages is one check per rule with a page count", async () => {
+  test("a collector timing out on many pages is a skipped check on each page, and one summary", async () => {
     const timedOut = { budgetMs: 1000, ruleIds: ["test/collected"] };
     const collected: CollectedSiteSignals = {
       pages: ["a", "b", "c"].map((p) => ({ ...emptySignal(`https://example.com/${p}`), timedOut })),
     };
     const runner = makeRunner([rule("test/collected", "site", () => pass("test/collected"))]);
     const { ruleResults } = await runner.runSiteRules(siteData(3), undefined, collected);
-    const errors = ruleResults.get("test/collected")!.checks.filter((c) => c.name === "test/collected-error");
-    expect(errors).toHaveLength(1);
-    expect(errors[0].pageUrl).toBe("https://example.com/a");
-    expect(errors[0].details).toEqual({ timedOut: true, budgetMs: 1000, pages: 3 });
+    const checks = ruleResults.get("test/collected")!.checks;
+    const errors = checks.filter((c) => c.name === "test/collected-error");
+    expect(errors.map((c) => [c.status, c.pageUrl])).toEqual([
+      ["skipped", "https://example.com/a"],
+      ["skipped", "https://example.com/b"],
+      ["skipped", "https://example.com/c"],
+    ]);
+    expect(checks.some((c) => c.status === "fail")).toBe(false);
+    expect(checks.filter((c) => c.name === "test/collected-timeouts")).toEqual([
+      expect.objectContaining({ status: "info", details: { timedOut: true, budgetMs: 1000, pagesNotChecked: 3 } }),
+    ]);
   });
+
+  test("a site rule that itself timed out still gets its extractor timeouts recorded", async () => {
+    const collected: CollectedSiteSignals = {
+      pages: [{ ...emptySignal("https://example.com/a"), timedOut: { budgetMs: 50, ruleIds: ["test/slow-site"] } }],
+    };
+    const slow = rule("test/slow-site", "site", () => {
+      const until = performance.now() + 200;
+      while (performance.now() < until) {
+        // spin
+      }
+      return pass("test/slow-site");
+    });
+    const { ruleResults } = await makeRunner([slow], 50).runSiteRules(siteData(1), undefined, collected);
+    const names = ruleResults.get("test/slow-site")!.checks.map((c) => `${c.name}:${c.status}`);
+    expect(names).toContain("test/slow-site-timeouts:info");
+    expect(names.filter((n) => n.startsWith("test/slow-site-error:skipped")).length).toBe(2);
+  }, 30_000);
 
   test("security/leaked-secrets: an unscanned page is never reported as clean", async () => {
     const collected: CollectedSiteSignals = {
@@ -468,9 +503,10 @@ describe("page-time collectors run under the budget", () => {
     // No "pass / No leaked API keys or secrets detected" for a run that skipped a page.
     expect(checks.some((c) => c.status === "pass")).toBe(false);
     expect(checks.some((c) => c.message.includes("No leaked"))).toBe(false);
-    // The timeout is a failed check against the page (what scoring and the summary count)...
+    // The timeout is a skipped check against the page: not evaluated, no finding...
     const error = byName(checks, "security/leaked-secrets-error");
-    expect(error?.status).toBe("fail");
+    expect(error?.status).toBe("skipped");
+    expect(error?.skipReason).toBe("rule-timed-out");
     expect(error?.pageUrl).toBe("https://example.com/b");
     expect(error?.details).toMatchObject({ timedOut: true });
     // ...and the rule itself says the page was not scanned.

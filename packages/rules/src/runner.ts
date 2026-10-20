@@ -1,7 +1,7 @@
 import { logger, profileRules } from "./logger";
 // Rule runner - executes rules with context
 
-import { PRIVATE_TARGET_SKIP_REASON } from "@squirrelscan/core-contracts";
+import { PRIVATE_TARGET_SKIP_REASON, RULE_TIMED_OUT_SKIP_REASON } from "@squirrelscan/core-contracts";
 import { detectSoft404, parsePage } from "@squirrelscan/parser";
 import { mapWithConcurrency } from "@squirrelscan/utils";
 import { nonPublicHostLabel } from "@squirrelscan/utils/non-public-host";
@@ -264,14 +264,14 @@ export class RuleRunner {
   // `collectedTimeoutChecks` assume no two page rules interleave. Parallelising page
   // rules would need an atomic per-rule counter instead.
   // Page rules that have already timed out in this run, with the live `details`
-  // of the one fail check that reported it. A slow pattern times out on every page
-  // that triggers it, so only the first page is a fail and later ones are skipped
-  // (and counted), not one fail per page flooding the report and the score.
+  // of the first skipped check that reported it. A timed-out page is not
+  // evaluated (pub#960), never a finding: every page gets a skipped check, and the
+  // count of pages lives on the first one and in the `-timeouts` info row.
   //
   // This is per-AUDIT state on the runner: a runner must serve one audit, or
   // `resetAudit()` must be called between audits (`runSiteRules`, the last step of
   // an audit, also clears it). Otherwise a second audit's first timeout of the
-  // same rule would be a skipped check and its report would carry no fail at all.
+  // same rule would be counted onto the first audit's check.
   // The in-place `details.pages` on the first check is best effort: a sink may
   // have serialized it already, so the final count is also emitted by
   // `runSiteRules` as one `<rule>-timeouts` summary check.
@@ -382,8 +382,9 @@ export class RuleRunner {
    * sibling's real verdict.
    *
    * `budgetMs` bounds the synchronous part of `run()` (see rule-budget.ts). A rule
-   * that runs past it is abandoned and recorded as a `<id>-error` fail check, the
-   * same shape as a thrown error, so the rest of the audit carries on.
+   * that runs past it is abandoned and recorded as a `<id>-error` SKIPPED check
+   * (`rule-timed-out`: not evaluated, never a finding), so the rest of the audit
+   * carries on. A thrown error is still a `<id>-error` fail check.
    */
   private runOneRule(
     rule: Rule,
@@ -520,6 +521,10 @@ export class RuleRunner {
           ...(scopeForLog ? { scope: scopeForLog } : { pageUrl: ctx.page.url }),
           budgetMs: e.budgetMs,
         });
+        // Not evaluated, never a finding (pub#960): the rule did not finish, so it
+        // found nothing there, and a skipped check is excluded from the score and
+        // the tallies and is not evidence for resolving a carried finding. Every
+        // page gets the same status, the first one included.
         const name = `${rule.meta.id}-error`;
         const earlier = scopeForLog ? undefined : this.timedOutPageRules.get(rule.meta.id);
         if (earlier) {
@@ -528,8 +533,8 @@ export class RuleRunner {
             {
               name,
               status: "skipped",
-              message: `Rule error: ${e.message} (already reported for this audit)`,
-              skipReason: "rule-timed-out",
+              message: `Rule not evaluated: ${e.message} (already reported for this audit)`,
+              skipReason: RULE_TIMED_OUT_SKIP_REASON,
               details: { timedOut: true, budgetMs: e.budgetMs, pages: earlier.details.pages },
             },
           ];
@@ -544,7 +549,15 @@ export class RuleRunner {
             budgetMs: e.budgetMs,
           });
         }
-        return [{ name, status: "fail", message: `Rule error: ${e.message}`, details }];
+        return [
+          {
+            name,
+            status: "skipped",
+            message: `Rule not evaluated: ${e.message}`,
+            skipReason: RULE_TIMED_OUT_SKIP_REASON,
+            details,
+          },
+        ];
       }
       return [
         {
@@ -756,8 +769,22 @@ export class RuleRunner {
           let result = results[i];
           const timeouts = collectedTimeouts.get(siteRules[i].meta.id);
           // Not onto a rule that was gated off: it did not run, whatever the collector did.
-          if (timeouts && !result.checks.every((c) => c.status === "skipped")) {
-            result = { ...result, checks: [...result.checks, ...timeouts] };
+          // A rule's own timeout is a skip too, and says nothing about the rule being
+          // gated off, so it does not count as one here.
+          const gatedOff = result.checks.every(
+            (c) => c.status === "skipped" && c.skipReason !== RULE_TIMED_OUT_SKIP_REASON
+          );
+          if (timeouts && !gatedOff) {
+            const meta = siteRules[i].meta;
+            const budgetMs = (timeouts[0]?.details as { budgetMs?: number } | undefined)?.budgetMs ?? 0;
+            result = {
+              ...result,
+              checks: [
+                ...result.checks,
+                ...timeouts,
+                timeoutSummaryCheck(meta.id, meta.name, meta.category, budgetMs, timeouts.length),
+              ],
+            };
           }
           ruleResults.set(siteRules[i].meta.id, result);
           allChecks.push(...result.checks);
@@ -777,7 +804,7 @@ export class RuleRunner {
 
   /**
    * Forget which page rules have timed out, so the next audit on this runner
-   * reports its own first timeout as a fail. A runner should serve one audit;
+   * counts its own timeouts from one. A runner should serve one audit;
    * this is for a caller that reuses one.
    */
   resetAudit(): void {
@@ -785,25 +812,40 @@ export class RuleRunner {
   }
 
   private timeoutSummaryChecks(): CheckResult[] {
-    return [...this.timedOutPageRules].map(([ruleId, t]) => {
-      const pages = t.details.pages;
-      const unchecked = `${pages} page${pages === 1 ? "" : "s"} not checked`;
-      return {
-        name: `${ruleId}-timeouts`,
-        status: "info" as const,
-        message:
-          t.category === "security"
-            ? `${t.name}: ${unchecked} because it exceeded its ${t.budgetMs} ms time budget. A timed-out security rule did not check those pages, so no finding there is not a clean result`
-            : `${t.name}: ${unchecked} because it exceeded its ${t.budgetMs} ms time budget`,
-        details: { timedOut: true, budgetMs: t.budgetMs, pagesNotChecked: pages },
-      };
-    });
+    return [...this.timedOutPageRules].map(([ruleId, t]) =>
+      timeoutSummaryCheck(ruleId, t.name, t.category, t.budgetMs, t.details.pages)
+    );
   }
 }
 
-/** `ruleId -> error checks` for the page-time extractors that ran past their
- *  budget: one check per rule (against the first page that timed out, with the
- *  count of pages in `details.pages`), not one per page. */
+/**
+ * The `<rule>-timeouts` info check: how many pages a timed-out rule did not
+ * check. The place the report surfaces a timeout, now that the per-page check
+ * is a skip (pub#960).
+ */
+function timeoutSummaryCheck(
+  ruleId: string,
+  name: string,
+  category: string,
+  budgetMs: number,
+  pages: number
+): CheckResult {
+  const unchecked = `${pages} page${pages === 1 ? "" : "s"} not checked`;
+  return {
+    name: `${ruleId}-timeouts`,
+    status: "info" as const,
+    message:
+      category === "security"
+        ? `${name}: ${unchecked} because it exceeded its ${budgetMs} ms time budget. A timed-out security rule did not check those pages, so no finding there is not a clean result`
+        : `${name}: ${unchecked} because it exceeded its ${budgetMs} ms time budget`,
+    details: { timedOut: true, budgetMs, pagesNotChecked: pages },
+  };
+}
+
+/** `ruleId -> skipped checks` for the page-time extractors that ran past their
+ *  budget: one per page that timed out, each against its own page (pub#960), the
+ *  same shape as a page rule's timeout. The count of pages is the `-timeouts`
+ *  info row's `pagesNotChecked`. */
 function collectedTimeoutChecks(
   collected: CollectedSiteSignals | undefined
 ): Map<string, CheckResult[]> {
@@ -812,20 +854,19 @@ function collectedTimeoutChecks(
     if (!page.timedOut) continue;
     const { budgetMs, ruleIds } = page.timedOut;
     for (const ruleId of ruleIds) {
-      const existing = byRule.get(ruleId)?.[0];
-      if (existing) {
-        (existing.details as { pages: number }).pages++;
-        continue;
+      let checks = byRule.get(ruleId);
+      if (!checks) {
+        checks = [];
+        byRule.set(ruleId, checks);
       }
-      byRule.set(ruleId, [
-        {
-          name: `${ruleId}-error`,
-          status: "fail",
-          message: `Rule error: ${new RuleTimeoutError(budgetMs).message}`,
-          pageUrl: page.url,
-          details: { timedOut: true, budgetMs, pages: 1 },
-        },
-      ]);
+      checks.push({
+        name: `${ruleId}-error`,
+        status: "skipped",
+        message: `Rule not evaluated: ${new RuleTimeoutError(budgetMs).message}`,
+        skipReason: RULE_TIMED_OUT_SKIP_REASON,
+        pageUrl: page.url,
+        details: { timedOut: true, budgetMs },
+      });
     }
   }
   return byRule;

@@ -183,6 +183,16 @@ export function encodeIndexGaps(sortedIndexes: readonly number[]): number[] {
 export const SCAN_TRUNCATED_SKIP_REASON = "scan-truncated";
 
 /**
+ * `skipReason` of the `<rule>-error` check of a rule abandoned for its time
+ * budget (pub#960). The rule did not finish on that page, so nothing was found
+ * there: a not-evaluated state, never a failed finding. A skip that is neither a
+ * verdict nor a registered gap, so the resolution signal lists the page as not
+ * evaluated for the checks the rule did emit elsewhere and a prior finding on
+ * it is carried, not resolved.
+ */
+export const RULE_TIMED_OUT_SKIP_REASON = "rule-timed-out";
+
+/**
  * The runner's noindex gate (pub#457): a skip that is a "does not apply"
  * verdict for every check of its rule on that page, so the signal and the merge
  * read it as clean, not as a gap. Also the skip's `details.foldKey`.
