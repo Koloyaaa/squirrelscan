@@ -190,7 +190,8 @@ describe("static-hidden: never hidden where Chromium shows the element", () => {
 });
 
 // pub#678: the <style> reader is bounded on hostile input. Past a bound it
-// stops reading, and stylesheet-based hiding is no longer settled.
+// stops reading, and every element reads "unknown" (pub#1015): the rules it
+// dropped could hide or show anything.
 describe("static-hidden: <style> reading is bounded", () => {
   const timed = (body: string) => {
     const started = performance.now();
@@ -201,14 +202,14 @@ describe("static-hidden: <style> reading is bounded", () => {
   test("a stylesheet past the size bound is not read", () => {
     const big = `.pad{color:red}`.repeat(20_000);
     const { seen, ms } = timed(`<style>${big}.x{display:none}</style><b id="t" class="x"></b>`);
-    expect(seen).toBe("shown");
+    expect(seen).toBe("unknown");
     expect(ms).toBeLessThan(2000);
   });
 
   test("more rules than the bound: not read", () => {
     const rules = Array.from({ length: 6000 }, (_, i) => `.r${i}{display:none}`).join("");
     const { seen, ms } = timed(`<style>${rules}.x{display:none}</style><b id="t" class="x"></b>`);
-    expect(seen).toBe("shown");
+    expect(seen).toBe("unknown");
     expect(ms).toBeLessThan(2000);
   });
 
@@ -216,13 +217,13 @@ describe("static-hidden: <style> reading is bounded", () => {
     const nested = `${".a{display:block;".repeat(700)}${"}".repeat(700)}`;
     expect(nested.length).toBeGreaterThan(11_000);
     const { seen, ms } = timed(`<style>${nested}.x{display:none}</style><b id="t" class="x"></b>`);
-    expect(seen).not.toBe("hidden");
+    expect(seen).toBe("unknown");
     expect(ms).toBeLessThan(2000);
   });
 
   test("an over-long selector is not read", () => {
     const long = `.x${".y".repeat(600)}`;
-    expect(verdict(`<style>${long}{display:none}</style><b id="t" class="x"></b>`)).not.toBe("hidden");
+    expect(verdict(`<style>${long}{display:none}</style><b id="t" class="x"></b>`)).toBe("unknown");
   });
 
   test("4,000 rules against 2,000 controls stays fast", () => {
