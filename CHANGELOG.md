@@ -17,6 +17,10 @@ How it works:
 
 ## [Unreleased]
 
+### Added
+
+- a11y, links: `link-text` and `anchor-text` now recognise generic link text in Spanish, French, German, Portuguese, Italian, Dutch, Japanese, Chinese, Korean and Russian (`cliquez ici`, `mehr`, `haga clic aquí`, `詳しくはこちら` and similar), chosen by the page's `<html lang>`, with English always checked. A page with no or an unknown `lang` keeps the English list, matching is on the whole text, and the conventional account and legal labels are never reported (#840).
+
 ## v0.0.127 (2026-10-22)
 
 Custom request headers stay with the audited origin unless you name another host, the default rule time budget doubles, and a smart audit keeps findings it did not get to re-check.
