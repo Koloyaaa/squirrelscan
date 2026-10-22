@@ -20,6 +20,45 @@ export function isValidHeaderName(name: string): boolean {
   return HEADER_NAME_RE.test(name);
 }
 
+/**
+ * True if `value` is something `[crawler] header_hosts` can read as a host: a
+ * host name or address, optionally with an `http://` or `https://` prefix, a
+ * port, and a path or trailing slash (which are ignored). Wildcards, userinfo,
+ * other schemes, empty labels and a trailing dot are refused, and an
+ * internationalised name is accepted (it is matched in its punycode form, #959).
+ */
+export function isValidHeaderHost(value: string): boolean {
+  const raw = value.trim();
+  if (raw === "" || /[*@\s\\]/.test(raw) || raw.includes("..")) return false;
+  const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(raw);
+  if (scheme && !/^https?$/i.test(scheme[1]!)) return false;
+  const authority = (scheme ? raw.slice(scheme[0].length) : raw).split(/[/?#]/)[0]!;
+  if (authority === "" || authority.replace(/:\d{1,5}$/, "").endsWith(".")) return false;
+  try {
+    return new URL(`https://${authority}`).hostname !== "";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The URL whose origin the custom request headers are scoped to (#959): the
+ * crawl's base URL, except that an https start URL whose same-site redirect
+ * landed on plain http keeps its https origin. The crawl still follows the
+ * redirect, but the headers are never sent over http on the strength of it.
+ * A missing or unreadable start URL falls back to the base URL.
+ */
+export function headerScopeBase(seedUrl: string | null | undefined, baseUrl: string): string {
+  try {
+    const seed = seedUrl ? new URL(seedUrl) : null;
+    const base = baseUrl ? new URL(baseUrl) : null;
+    if (seed && base && seed.protocol === "https:" && base.protocol === "http:") return seed.origin;
+  } catch {
+    // Unreadable: fall through to the base URL.
+  }
+  return baseUrl;
+}
+
 /** True if `value` contains only safe RFC 7230 field-value chars (no CR/LF/NUL/CTL). */
 export function isValidHeaderValue(value: string): boolean {
   return HEADER_VALUE_RE.test(value);
@@ -156,4 +195,61 @@ export function isCompressibleContentType(
     t.includes("+xml") ||
     t.includes("+json")
   );
+}
+
+// Which URLs get the audit's custom request headers (#732, #959). The headers
+// usually carry credentials (Web Bot Auth, Cloudflare Access, API keys), so only
+// the audited origin gets them, plus the hosts the user names.
+
+/** True when the custom headers may be sent to `url`. */
+export type HeaderScope = (url: string) => boolean;
+
+interface NamedHeaderHost {
+  host: string;
+  /** Written with an explicit `http://` prefix: plain http is allowed too. */
+  allowHttp: boolean;
+}
+
+function parseNamedHeaderHost(value: string): NamedHeaderHost | null {
+  const raw = value.trim().toLowerCase();
+  try {
+    const host = new URL(raw.includes("://") ? raw : `https://${raw}`).hostname.replace(/^\[|\]$/g, "");
+    return host === "" ? null : { host, allowHttp: raw.startsWith("http://") };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `baseUrl` is the start URL after its redirects. Its scheme, host and port
+ * match; another port or scheme on the same host does not. `extraHosts` match
+ * by host alone, as the user named them, and only over https: an entry written
+ * with an explicit `http://` prefix also allows plain http.
+ */
+export function createHeaderScope(
+  baseUrl: string,
+  extraHosts: readonly string[] = [],
+): HeaderScope {
+  let origin = "";
+  try {
+    origin = baseUrl ? new URL(baseUrl).origin : "";
+  } catch {
+    // An unparseable base URL has no origin: nothing but named hosts matches.
+  }
+  const named = new Map<string, boolean>();
+  for (const entry of extraHosts) {
+    const parsed = parseNamedHeaderHost(entry);
+    if (parsed) named.set(parsed.host, (named.get(parsed.host) ?? false) || parsed.allowHttp);
+  }
+  return (url) => {
+    try {
+      const parsed = new URL(url);
+      if (origin !== "" && parsed.origin === origin) return true;
+      const allowHttp = named.get(parsed.hostname.toLowerCase().replace(/^\[|\]$/g, ""));
+      if (allowHttp === undefined) return false;
+      return parsed.protocol === "https:" || (allowHttp && parsed.protocol === "http:");
+    } catch {
+      return false;
+    }
+  };
 }

@@ -4,61 +4,37 @@
 // user content, a SaaS CNAME, a dangling CNAME someone else claimed. So only
 // the audited origin gets them, plus the hosts the user names.
 
-export type HeaderScope = (url: string) => boolean;
+import { createHeaderScope, type HeaderScope } from "@squirrelscan/utils/headers";
 
-function hostOf(value: string): string {
-  const raw = value.trim().toLowerCase();
-  try {
-    return new URL(raw.includes("://") ? raw : `https://${raw}`).hostname.replace(/^\[|\]$/g, "");
-  } catch {
-    return "";
-  }
-}
+export { createHeaderScope, type HeaderScope };
 
 /**
- * `baseUrl` is the start URL after its redirects. Its scheme, host and port
- * match; another port or scheme on the same host does not. `extraHosts` match
- * by host alone, as the user named them.
+ * Custom headers and the scope that decides who gets them, as one option: the
+ * scope is required whenever headers are set, so a caller cannot send them
+ * everywhere by leaving it out (#959).
  */
-export function createHeaderScope(
-  baseUrl: string,
-  extraHosts: readonly string[] = [],
-): HeaderScope {
-  let origin = "";
-  try {
-    origin = baseUrl ? new URL(baseUrl).origin : "";
-  } catch {
-    // An unparseable base URL has no origin: nothing but named hosts matches.
-  }
-  const named = new Set(extraHosts.map(hostOf).filter((h) => h !== ""));
-  return (url) => {
-    try {
-      const parsed = new URL(url);
-      return (
-        (origin !== "" && parsed.origin === origin) ||
-        named.has(parsed.hostname.toLowerCase().replace(/^\[|\]$/g, ""))
-      );
-    } catch {
-      return false;
-    }
-  };
-}
+export type ScopedHeaderOptions =
+  | { customHeaders?: undefined; headerScope?: HeaderScope }
+  | { customHeaders: Record<string, string>; headerScope: HeaderScope };
 
-/** The custom headers for `url`: all of them in scope, none out of it. `undefined` scope = no limit. */
+/**
+ * The custom headers for `url`: all of them in scope, none out of it. With no
+ * scope, none: a missing scope never widens who gets the headers.
+ */
 export function customHeadersFor(
   url: string,
   headers: Record<string, string> | undefined,
   scope: HeaderScope | undefined,
 ): Record<string, string> | undefined {
-  if (!headers || !scope || scope(url)) return headers;
-  return undefined;
+  if (!headers) return undefined;
+  return scope?.(url) ? headers : undefined;
 }
 
-/** True when `headers` were set but withheld from `url` by the scope. */
+/** True when `headers` were set but withheld from `url` by the scope (or by having none). */
 export function headersWithheldFrom(
   url: string,
   headers: Record<string, string> | undefined,
   scope: HeaderScope | undefined,
 ): boolean {
-  return !!headers && Object.keys(headers).length > 0 && !!scope && !scope(url);
+  return !!headers && Object.keys(headers).length > 0 && !scope?.(url);
 }
