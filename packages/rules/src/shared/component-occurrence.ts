@@ -8,6 +8,21 @@ import type { Element } from "linkedom";
 import { createHash } from "node:crypto";
 
 type RegionRole = ComponentOccurrence["region"]["role"];
+type NestedIn = ComponentOccurrence["region"]["nestedIn"];
+
+/** Safety bound on every upward walk and every ancestor list; real DOMs are far shallower. */
+const MAX_ANCESTOR_WALK = 64;
+/**
+ * Work one page's evidence may cost, in elements visited by the digests, text
+ * reads and hint searches that are sized by a subtree (up to about half a
+ * microsecond each, so the limit is about half a second). Ordinary pages spend a
+ * small share of it: a link is a few elements and a shared region is digested
+ * once. A page built so that every faulty element has a huge, distinct ancestor
+ * (a deep chain, nested anchors) would otherwise cost the square of its size;
+ * once the limit is spent the remaining elements are page-scoped, which is what
+ * an element the rule cannot judge already is.
+ */
+const EVIDENCE_WORK_LIMIT = 1_000_000;
 
 /**
  * A deterministic, non-reversible display key; raw crawler text never leaves
@@ -116,43 +131,127 @@ function regionRole(element: Element): RegionRole | undefined {
 }
 
 /**
- * Article/main ancestry strictly BETWEEN `element` and `region`. `nestedIn`
- * below only looks ABOVE the region, so a `<footer><article><a>` reads as plain
- * site chrome and two unrelated articles' links merge into one repair target.
+ * What the elements ABOVE a node say about it, carried down one document pass
+ * instead of re-walked from every landmark: the nearest article/main ancestor,
+ * and the region roles of the ancestors, nearest first.
+ *
+ * `nesting` only looks ABOVE a region (`<footer><article><a>` reads as plain
+ * site chrome there; the article between the element and its region is
+ * {@link RegionScope.below}). `roles` keeps landmarks scoped to their enclosing
+ * chrome composition: a navigation inside a header is not the same repair
+ * target as an otherwise identical navigation inside a footer, and header
+ * siblings must not renumber footer navigation slots on another layout. It is
+ * cut at {@link MAX_ANCESTOR_WALK}, so a hostile chain of nested landmarks
+ * cannot make every slot key as long as the chain.
  */
-function nestedBelowRegion(
-  element: Element,
-  region: Element,
-): ComponentOccurrence["region"]["nestedIn"] | undefined {
-  for (let current = element.parentElement; current && current !== region; current = current.parentElement) {
-    if (isArticle(current)) return "article";
-    if (isMain(current)) return "main";
-  }
-  return undefined;
+interface AncestorState {
+  nesting: "article" | "main" | "none";
+  roles: readonly RegionRole[];
 }
 
-function nestedIn(element: Element): ComponentOccurrence["region"]["nestedIn"] {
-  for (let current = element.parentElement; current; current = current.parentElement) {
-    if (isArticle(current)) return "article";
-    if (isMain(current)) return "main";
-  }
-  return "none";
+const ROOT_STATE: AncestorState = { nesting: "none", roles: [] };
+
+/** The state a child of `element` inherits. Shared with the parent's when `element` changes nothing. */
+function childState(element: Element, state: AncestorState): AncestorState {
+  const role = regionRole(element);
+  const nesting = isArticle(element) ? "article" : isMain(element) ? "main" : state.nesting;
+  if (!role && nesting === state.nesting) return state;
+  return {
+    nesting,
+    roles: role ? [role, ...state.roles].slice(0, MAX_ANCESTOR_WALK) : state.roles,
+  };
+}
+
+function contextOf(state: AncestorState): string {
+  return state.roles.length > 0 ? state.roles.join(">") : "none";
+}
+
+/** A landmark as the rest of its page sees it. */
+interface LandmarkInfo {
+  nesting: NestedIn;
+  ancestorContext: string;
+  /** `role:N`, N counting the landmarks with the same role, nesting and context in document order. */
+  slot: string;
+  /**
+   * Under {@link MAX_ANCESTOR_WALK} landmarks or more. Real chrome nests a few
+   * levels; this is generated or hostile markup, and a region digest per level
+   * of it would cost the square of the nesting.
+   */
+  tooDeep: boolean;
+}
+
+/** What one document-order pass over a page records. */
+interface RootIndex {
+  landmarks: WeakMap<Element, LandmarkInfo>;
+  /** Elements in each subtree, itself included. */
+  sizes: WeakMap<Element, number>;
 }
 
 /**
- * Keep landmarks scoped to their enclosing chrome composition. A navigation
- * inside a header is not the same repair target as an otherwise identical
- * navigation inside a footer, and header siblings must not renumber footer
- * navigation slots on another layout.
+ * Every landmark under `root`, with its nesting, ancestor context and slot, and
+ * the size of every subtree, from ONE iterative document-order pass. The slot of
+ * a landmark used to come from a `querySelectorAll("*")` per distinct
+ * `role|nesting|context` key, each element of which walked its own ancestors, so
+ * a page with many distinct landmark contexts cost keys x elements x depth.
+ *
+ * `root` itself is not numbered (it was never one of its own peers), but it
+ * does count as an ancestor of everything under it.
  */
-function semanticAncestorContext(element: Element): string {
-  const roles: string[] = [];
-  for (let current = element.parentElement; current; current = current.parentElement) {
-    const role = regionRole(current);
-    if (role) roles.push(role);
+function indexRoot(root: Element): RootIndex {
+  const landmarks = new WeakMap<Element, LandmarkInfo>();
+  const counters = new Map<string, number>();
+  const order: Element[] = [root];
+  // Parallel stacks: an element and the state its ancestors give it.
+  const pending: Element[] = [];
+  const states: AncestorState[] = [];
+  const pushChildren = (parent: Element, state: AncestorState) => {
+    const children = [...parent.children] as Element[];
+    for (let index = children.length - 1; index >= 0; index -= 1) {
+      pending.push(children[index]!);
+      states.push(state);
+    }
+  };
+  pushChildren(root, childState(root, ROOT_STATE));
+  while (pending.length > 0) {
+    const element = pending.pop()!;
+    const inherited = states.pop()!;
+    order.push(element);
+    const role = regionRole(element);
+    if (role) {
+      const context = contextOf(inherited);
+      const key = `${role}|${inherited.nesting}|${context}`;
+      const position = (counters.get(key) ?? 0) + 1;
+      counters.set(key, position);
+      landmarks.set(element, {
+        nesting: inherited.nesting,
+        ancestorContext: context,
+        slot: `${role}:${position}`,
+        tooDeep: inherited.roles.length >= MAX_ANCESTOR_WALK,
+      });
+    }
+    pushChildren(element, childState(element, inherited));
   }
-  return roles.length > 0 ? roles.join(">") : "none";
+  // Document order puts a parent before its children, so walking it backwards
+  // finishes every child before the parent that adds it up.
+  const sizes = new WeakMap<Element, number>();
+  for (let index = order.length - 1; index >= 0; index -= 1) {
+    const element = order[index]!;
+    const size = (sizes.get(element) ?? 0) + 1;
+    sizes.set(element, size);
+    const parent = element.parentElement;
+    if (parent && element !== root) sizes.set(parent, (sizes.get(parent) ?? 0) + size);
+  }
+  return { landmarks, sizes };
 }
+
+/** The nearest landmark at or above an element, and the content ancestry between them. */
+interface RegionScope {
+  region: Element | null;
+  /** An article/main strictly BETWEEN the element and `region`. */
+  below: "article" | "main" | undefined;
+}
+
+const NO_REGION: RegionScope = { region: null, below: undefined };
 
 /**
  * A structural digest of `element`'s whole subtree, hashed as it is walked.
@@ -190,24 +289,28 @@ function structuralDigest(element: Element): string {
   return `s128:${hash.digest("hex").slice(0, 32)}`;
 }
 
+/**
+ * The element's path under `root`, nearest levels kept: a page-builder DOM is a
+ * few dozen levels deep, and past {@link MAX_ANCESTOR_WALK} the locator reads
+ * `\u2026>` instead of naming the rest, so one very deep element costs a bounded
+ * string and a bounded walk, not its whole depth.
+ */
 function elementPath(root: Element, element: Element, cache: ComponentOccurrenceCache): string {
   const parts: string[] = [];
+  let reachedRoot = true;
   for (
     let current: Element | null = element;
     current && current !== root;
     current = current.parentElement
   ) {
+    if (parts.length >= MAX_ANCESTOR_WALK) {
+      reachedRoot = false;
+      break;
+    }
     parts.push(`${tag(current)}:${cache.siblingTagIndex(current)}`);
   }
-  parts.push(tag(root));
+  parts.push(reachedRoot ? tag(root) : "\u2026");
   return parts.reverse().join(">");
-}
-
-function documentRoot(element: Element): Element {
-  let root = element;
-  for (let current = element.parentElement; current; current = current.parentElement)
-    root = current;
-  return root;
 }
 
 type RegionEvidence = {
@@ -222,7 +325,20 @@ type RegionEvidence = {
  */
 export class ComponentOccurrenceCache {
   readonly regionEvidence = new WeakMap<Element, RegionEvidence>();
-  readonly slots = new Map<string, WeakMap<Element, string>>();
+  /** Landmarks and subtree sizes of a document, from one pass per root; see {@link indexRoot}. */
+  readonly rootIndexes = new WeakMap<Element, RootIndex>();
+  /** Elements whose ladder features (signature, text length, hint) have been paid for. */
+  private readonly ladderPaid = new WeakSet<Element>();
+  private work = 0;
+  private workSpent = false;
+  /**
+   * Upward answers, memoised per element so every faulty element reuses its
+   * ancestors' work: each element is resolved once, so all the walks together
+   * cost the size of the DOM, not its depth times the number of faulty elements.
+   */
+  readonly roots = new WeakMap<Element, Element>();
+  readonly scopes = new WeakMap<Element, RegionScope>();
+  readonly ladderRoots = new WeakMap<Element, Element>();
   /** Per-parent tag positions keep repeated sibling locators linear in the DOM size. */
   readonly siblingTagPositions = new WeakMap<Element, WeakMap<Element, number>>();
   /** Direct-child tag sequence per element; rebuilt per faulty element made a
@@ -237,6 +353,122 @@ export class ComponentOccurrenceCache {
   readonly signatureBySkeleton = new Map<string, string>();
   /** Hints are per ancestor and every element in a block walks the same ones. */
   readonly rootHints = new WeakMap<Element, RootHint | null>();
+
+  /** The topmost element above `element` (or `element` itself). */
+  rootOf(element: Element): Element {
+    return this.resolveUp(this.roots, element, (current, parent, parentValue) => parentValue ?? current);
+  }
+
+  /**
+   * `<body>` when `element` sits in one, else the topmost element. The ladder's
+   * outer bound for a page with no landmark at all.
+   */
+  ladderRoot(element: Element): Element {
+    return this.resolveUp(this.ladderRoots, element, (current, parent, parentValue) =>
+      tag(current) === "body" ? current : (parentValue ?? current),
+    );
+  }
+
+  /** The nearest landmark at or above `element`, and what lies between them. */
+  regionScope(element: Element): RegionScope {
+    return this.resolveUp(this.scopes, element, (current, parent, parentScope) => {
+      if (regionRole(current)) return { region: current, below: undefined };
+      if (!parent || !parentScope || parentScope.region === null) return NO_REGION;
+      const region = parentScope.region;
+      const below =
+        parent === region
+          ? undefined
+          : isArticle(parent)
+            ? "article"
+            : isMain(parent)
+              ? "main"
+              : parentScope.below;
+      // Most elements add nothing to what their parent already says.
+      return parentScope.below === below ? parentScope : { region, below };
+    });
+  }
+
+  private rootIndex(element: Element): RootIndex {
+    const root = this.rootOf(element);
+    let index = this.rootIndexes.get(root);
+    if (!index) {
+      index = indexRoot(root);
+      this.rootIndexes.set(root, index);
+      this.landmarkIndexBuilds++;
+    }
+    return index;
+  }
+
+  /** Elements in the subtree rooted at `element`, itself included. */
+  subtreeSize(element: Element): number {
+    return this.rootIndex(element).sizes.get(element) ?? 1;
+  }
+
+  /**
+   * Pay `units` of subtree-sized work. False, and every later call false too,
+   * once the page's {@link EVIDENCE_WORK_LIMIT} would be passed.
+   */
+  spend(units: number): boolean {
+    if (this.workSpent) return false;
+    if (this.work + units > EVIDENCE_WORK_LIMIT) {
+      this.workSpent = true;
+      return false;
+    }
+    this.work += units;
+    return true;
+  }
+
+  /** Pay once for the ladder features of `element`; they are memoised after that. */
+  payLadder(element: Element, factor: number): boolean {
+    if (this.ladderPaid.has(element)) return true;
+    if (!this.spend(factor * this.subtreeSize(element))) return false;
+    this.ladderPaid.add(element);
+    return true;
+  }
+
+  /** Nesting, ancestor context and slot of a landmark, from its document's one pass. */
+  landmark(region: Element): LandmarkInfo {
+    return (
+      this.rootIndex(region).landmarks.get(region) ?? {
+        nesting: "none",
+        ancestorContext: "none",
+        slot: `${regionRole(region) ?? "unknown"}:unknown`,
+        tooDeep: false,
+      }
+    );
+  }
+
+  /**
+   * Resolve `compute` for `element` from the values of its ancestors, filling the
+   * memo for every element it passes. Iterative: the chain is collected upward to
+   * the first memoised ancestor, then resolved from the top down.
+   */
+  private resolveUp<T>(
+    memo: WeakMap<Element, T>,
+    element: Element,
+    compute: (current: Element, parent: Element | null, parentValue: T | undefined) => T,
+  ): T {
+    const known = memo.get(element);
+    if (known !== undefined) return known;
+    const chain: Element[] = [];
+    let anchor: Element | null = null;
+    for (let current: Element | null = element; current; current = current.parentElement) {
+      if (memo.has(current)) {
+        anchor = current;
+        break;
+      }
+      chain.push(current);
+    }
+    let parent: Element | null = anchor;
+    let parentValue: T | undefined = anchor ? memo.get(anchor) : undefined;
+    for (let index = chain.length - 1; index >= 0; index -= 1) {
+      const current = chain[index]!;
+      parentValue = compute(current, parent, parentValue);
+      memo.set(current, parentValue);
+      parent = current;
+    }
+    return parentValue as T;
+  }
 
   rootHint(element: Element): RootHint | undefined {
     const cached = this.rootHints.get(element);
@@ -275,6 +507,7 @@ export class ComponentOccurrenceCache {
     return value;
   }
   regionBuilds = 0;
+  landmarkIndexBuilds = 0;
   siblingTagIndexBuilds = 0;
   childTagSequenceBuilds = 0;
 
@@ -306,34 +539,16 @@ export class ComponentOccurrenceCache {
     return positions.get(element) ?? 1;
   }
 
-  getRegionEvidence(
-    region: Element,
-    role: RegionRole,
-    nesting: ComponentOccurrence["region"]["nestedIn"],
-    ancestorContext: string,
-  ): RegionEvidence {
+  /** The digest, text hash and slot of a landmark; undefined once the page's work budget is spent. */
+  getRegionEvidence(region: Element): RegionEvidence | undefined {
     const cached = this.regionEvidence.get(region);
     if (cached) return cached;
-    const root = documentRoot(region);
-    const slotKey = `${role}|${nesting}|${ancestorContext}`;
-    let slots = this.slots.get(slotKey);
-    if (!slots) {
-      slots = new WeakMap<Element, string>();
-      // Article/main-local landmarks are not peers of site chrome. Their slot
-      // must not shift a footer/navigation identity on another page layout.
-      const peers = [...root.querySelectorAll("*")].filter(
-        (element) =>
-          regionRole(element as Element) === role &&
-          nestedIn(element as Element) === nesting &&
-          semanticAncestorContext(element as Element) === ancestorContext,
-      ) as Element[];
-      peers.forEach((peer, index) => slots!.set(peer, `${role}:${index + 1}`));
-      this.slots.set(slotKey, slots);
-    }
+    // The digest and the text read each visit the whole region.
+    if (!this.spend(2 * this.subtreeSize(region))) return undefined;
     const evidence = {
       skeleton: structuralDigest(region),
       contentHash: componentHash(region.textContent?.replace(/\s+/g, " ").trim() ?? ""),
-      slot: slots.get(region) ?? `${role}:unknown`,
+      slot: this.landmark(region).slot,
     };
     this.regionEvidence.set(region, evidence);
     this.regionBuilds++;
@@ -353,21 +568,31 @@ export class ComponentOccurrenceCache {
  */
 const SUBTREE_NEAR_LEVELS = 4;
 const SUBTREE_ROOT_LEVELS = 4;
-/** Safety bound on the upward walk itself; real DOMs are far shallower. */
-const MAX_ANCESTOR_WALK = 64;
-
 /**
  * Values that must never ride along in a hint. A heading or aria-label is page
  * text, so it is filtered the way any other emitted text is: addresses, phone
  * numbers, URLs and token-shaped strings are dropped rather than truncated.
  */
 const SENSITIVE_HINT_TEXT =
-  /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b|\bhttps?:\/\/\S+|\b\+?\d[\d(). -]{7,}\d\b|\b(?:bearer|token|key|secret)\b\s*[:=]?\s*\S{6,}/i;
+  /\b[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,255}\.[A-Z]{2,}\b|\bhttps?:\/\/\S+|\b\+?\d[\d(). -]{7,40}\d\b|\b(?:bearer|token|key|secret)\b\s?[:=]?\s?\S{6,}/i;
 const HINT_MAX = 60;
+/**
+ * Characters of an attribute or heading read at all, and characters tested for
+ * sensitive shapes. Both are far past what can be emitted (HINT_MAX - 1) and
+ * past an email's longest local part, so the cut hides nothing; it is what keeps
+ * a megabyte of crawled text from costing the pattern a megabyte of work.
+ */
+const HINT_READ_MAX = 1024;
+const HINT_TEST_MAX = 256;
 
 /** Bounded, single-line, and dropped entirely when it carries anything sensitive. */
 function hintText(value: string | null | undefined): string | undefined {
-  const text = (value ?? "").replace(/\s+/g, " ").trim();
+  const text = (value ?? "")
+    .trimStart()
+    .slice(0, HINT_READ_MAX)
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, HINT_TEST_MAX);
   if (!text || SENSITIVE_HINT_TEXT.test(text)) return undefined;
   return text.length > HINT_MAX ? `${text.slice(0, HINT_MAX - 1)}\u2026` : text;
 }
@@ -422,15 +647,6 @@ function rootHint(element: Element): RootHint | undefined {
  * pages, every one of them unjudgeable. `<body>` is the honest outer bound
  * there, and the text share is measured against it for the same reason.
  */
-function ladderRoot(element: Element): Element {
-  let last = element;
-  for (let current: Element | null = element; current; current = current.parentElement) {
-    if (tag(current) === "body") return current;
-    last = current;
-  }
-  return last;
-}
-
 /**
  * Describe each ancestor between the faulty element and its region root.
  *
@@ -445,6 +661,7 @@ function subtreeCandidates(
   region: Element,
   cache: ComponentOccurrenceCache,
 ): SubtreeCandidate[] {
+  if (!cache.payLadder(region, 1)) return [];
   const regionText = cache.textLength(region);
   if (regionText === 0) return [];
   // One upward pass collects both the ancestors and the path segments. Calling
@@ -472,7 +689,10 @@ function subtreeCandidates(
   )
     chosen.add(index);
   const candidates: SubtreeCandidate[] = [];
-  for (const index of [...chosen].sort((left, right) => left - right)) {
+  const rungs = [...chosen].sort((left, right) => left - right);
+  // A signature, a text length and a hint search each visit the ancestor's subtree.
+  for (const index of rungs) if (!cache.payLadder(ancestors[index]!, 3)) return [];
+  for (const index of rungs) {
     const ancestor = ancestors[index]!;
     // The locator for this rung is the element's path through the ancestors
     // below it, rooted at that ancestor's tag.
@@ -488,13 +708,6 @@ function subtreeCandidates(
   return candidates;
 }
 
-function findRegion(element: Element): Element | undefined {
-  for (let current: Element | null = element; current; current = current.parentElement) {
-    if (regionRole(current)) return current;
-  }
-  return undefined;
-}
-
 export function componentOccurrence(
   input: {
     pageUrl: string;
@@ -508,22 +721,38 @@ export function componentOccurrence(
   },
   cache = new ComponentOccurrenceCache(),
 ): ComponentOccurrence {
-  const region = findRegion(input.element);
+  const scope = cache.regionScope(input.element);
+  let region = scope.region ?? undefined;
+  let landmark = region ? cache.landmark(region) : undefined;
+  const elementDigest = cache.spend(cache.subtreeSize(input.element))
+    ? structuralDigest(input.element)
+    : undefined;
+  let regionEvidence =
+    elementDigest !== undefined && region && landmark && !landmark.tooDeep
+      ? cache.getRegionEvidence(region)
+      : undefined;
+  // Page-scoped, like an element with no landmark, and no ladder: a landmark under
+  // dozens of landmarks (generated or hostile markup), or a page whose evidence
+  // work is spent.
+  const unjudgeable = elementDigest === undefined || (region !== undefined && !regionEvidence);
+  if (unjudgeable) {
+    region = undefined;
+    landmark = undefined;
+    regionEvidence = undefined;
+  }
   const role = region ? regionRole(region)! : "unknown";
-  const nesting = region ? nestedIn(region) : "unknown";
-  const ancestorContext = region ? semanticAncestorContext(region) : "unknown";
+  const nesting = landmark ? landmark.nesting : "unknown";
+  const ancestorContext = landmark ? landmark.ancestorContext : "unknown";
   // An article header is content, not site chrome. Unknown DOM ancestry remains
   // deliberately page-scoped rather than becoming a speculative component.
-  const regionEvidence = region
-    ? cache.getRegionEvidence(region, role, nesting, ancestorContext)
-    : undefined;
   const regionSkeleton = regionEvidence?.skeleton ?? tag(input.element);
-  const elementSkeleton = structuralDigest(input.element);
+  const elementSkeleton =
+    elementDigest ?? componentHash(`${tag(input.element)}${stableAttributes(input.element)}`);
   // Ordered most-specific first, so the recorded reason names the actual cause
   // rather than whichever test happened to run first.
   const contentNested =
     region !== undefined &&
-    (nesting === "article" || nesting === "main" || nestedBelowRegion(input.element, region) !== undefined);
+    (nesting === "article" || nesting === "main" || scope.below !== undefined);
   const uncertainReason: ComponentOccurrence["uncertainReason"] = !region
     ? "no-region"
     : contentNested
@@ -565,8 +794,8 @@ export function componentOccurrence(
   const candidates =
     uncertainReason === "region-main" && region
       ? subtreeCandidates(input.element, region, cache)
-      : uncertainReason === "no-region"
-        ? subtreeCandidates(input.element, ladderRoot(input.element), cache)
+      : uncertainReason === "no-region" && !unjudgeable
+        ? subtreeCandidates(input.element, cache.ladderRoot(input.element), cache)
         : [];
 
   return {
@@ -586,7 +815,7 @@ export function componentOccurrence(
       // instances on one page without making a page-layout path part of family.
       locator: region
         ? `${regionEvidence!.slot}>${elementPath(region, input.element, cache)}`
-        : elementPath(documentRoot(input.element), input.element, cache),
+        : elementPath(cache.rootOf(input.element), input.element, cache),
       structuralSignature: componentHash(elementStructure),
     },
     defect: { kind: input.kind, values: input.values, valueHashes },
