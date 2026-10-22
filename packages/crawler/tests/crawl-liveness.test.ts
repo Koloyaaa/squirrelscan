@@ -147,13 +147,28 @@ describe("isCrawlAbandoned: a live lease is never abandoned", () => {
 
 describe("isCrawlAbandoned: a dead lease", () => {
   const dead = env({ pidAlive: () => false });
-  test("a killed crawled/stopped/paused crawl is abandoned once stale, with no newer audit", () => {
-    for (const status of ["crawled", "stopped", "paused", "failed"]) {
-      expect(isCrawlAbandoned(row({ status, heartbeat_at: NOW - (STALE + MIN) }), dead)).toBe(
-        true
-      );
-    }
+  test("a killed `crawled` crawl is abandoned once stale, with no newer audit", () => {
+    expect(
+      isCrawlAbandoned(row({ status: "crawled", heartbeat_at: NOW - (STALE + MIN) }), dead)
+    ).toBe(true);
   });
+  // stopped / paused / failed are resumable: a dead or unreleased lease must
+  // never retire them sooner than #945 (7 days), whoever the owner looks like.
+  for (const status of ["stopped", "paused", "failed"]) {
+    const owners: Array<[string, Partial<LeaseCrawlRow>, LeaseEnv]> = [
+      ["dead same-host pid", {}, dead],
+      ["other host", { owner_host: "elsewhere" }, env()],
+      ["null owner pid", { owner_pid: null }, env()],
+    ];
+    for (const [label, over, e] of owners) {
+      test(`${status}, 6 min stale, ${label}: the #945 verdict decides`, () => {
+        const r = (legacy: number) =>
+          row({ status, heartbeat_at: NOW - 6 * MIN, legacy_abandoned: legacy, ...over });
+        expect(isCrawlAbandoned(r(0), e)).toBe(false);
+        expect(isCrawlAbandoned(r(1), e)).toBe(true);
+      });
+    }
+  }
   test("a killed RUNNING crawl (what --resume continues) waits 24 h", () => {
     const r = (age: number, legacy = 0) =>
       row({ status: "running", heartbeat_at: NOW - age, legacy_abandoned: legacy });
@@ -353,6 +368,40 @@ describe("retirement reads the lease", () => {
     setLease(path, id, 555, "me", NOW);
     clock.t = NOW - 6 * HOUR;
     expect(await run(s.listAbandonedCrawls())).toEqual([]);
+    await run(s.close());
+  });
+});
+
+describe("retire transaction", () => {
+  test("a heartbeat committing mid-retire cannot fail it with SQLITE_BUSY_SNAPSHOT: the write lock is taken first", async () => {
+    const path = tempDbPath();
+    const s = new SQLiteStorage(path);
+    await run(s.init());
+    const id = await mk(s, NOW - 2 * HOUR, "crawled");
+    await mk(s, NOW - HOUR, "completed");
+    setLease(path, id, 555, "me", NOW - 10 * MIN);
+    let beatBlocked = false;
+    s.leaseEnv = {
+      now: () => NOW,
+      hostname: () => "me",
+      // Runs inside the retire transaction: try to commit a heartbeat from
+      // another connection right now, without waiting.
+      pidAlive: () => {
+        const other = new Database(path);
+        try {
+          other.exec("PRAGMA busy_timeout = 0");
+          other.query("UPDATE crawls SET heartbeat_at = ? WHERE id = ?").run(NOW, id);
+        } catch {
+          beatBlocked = true;
+        } finally {
+          other.close();
+        }
+        return false;
+      },
+    };
+    const out = await run(s.retireCrawlsDetailed([id], NOW, { allowAbandoned: true }));
+    expect(beatBlocked).toBe(true);
+    expect(out.retired).toEqual([id]);
     await run(s.close());
   });
 });

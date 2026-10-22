@@ -4857,7 +4857,11 @@ export class SQLiteStorage implements CrawlStorage {
             `UPDATE crawls SET retired_at = ? WHERE id IN (${placeholders})`
           ).run(retiredAt, ...retired);
         });
-        run();
+        // IMMEDIATE: take the write lock before the liveness read. A deferred
+        // transaction would read under a snapshot and then fail with
+        // SQLITE_BUSY_SNAPSHOT when a heartbeat committed in between; this way
+        // a beat waits for the lock and the verdict is made against current rows.
+        run.immediate();
         return { deleted, retired, skipped };
       },
       catch: (e) => StorageError.write(e),

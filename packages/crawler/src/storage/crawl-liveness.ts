@@ -15,10 +15,11 @@
 //     heartbeat under 24 h old: LIVE (a blocked event loop or a sleeping laptop;
 //     the 24 h cap bounds pid reuse).
 //  4. Otherwise the lease is dead. A killed `running` crawl is what `--resume`
-//     continues, so it is abandoned only after 24 h without a heartbeat; any
-//     other status after the stale window (which has passed by now). The legacy
-//     rule still applies on top, so a dead lease is never kept LONGER than #945
-//     would have kept it.
+//     continues, so it is abandoned only after 24 h without a heartbeat; a
+//     `crawled` one once the stale window has passed. `stopped`, `paused` and
+//     `failed` keep the legacy verdict (7 days for the resumable ones): a dead
+//     lease never retires them sooner. The legacy rule still applies on top, so
+//     a dead lease is never kept LONGER than #945 would have kept it.
 //
 // An owner on another host, or one whose pid or host cannot be read, gets no
 // pid probe: it is live until the stale window passes, then dead.
@@ -103,7 +104,11 @@ export function isCrawlAbandoned(row: LeaseCrawlRow, env: LeaseEnv): boolean {
     return false;
   }
 
-  const deadLongEnough =
-    row.status === "running" ? age >= CRAWL_LEASE_PID_TRUST_MS : true;
-  return deadLongEnough || legacy;
+  // Only `running` and `crawled` use a dead lease to retire EARLIER than #945.
+  // `stopped`, `paused` and `failed` are what `--resume` continues and #945 keeps
+  // them 7 days: an owner left behind by a kill -9 right after the status write
+  // (or a failed release) must not shorten that.
+  if (row.status === "running") return age >= CRAWL_LEASE_PID_TRUST_MS || legacy;
+  if (row.status === "crawled") return true;
+  return legacy;
 }

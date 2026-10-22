@@ -120,7 +120,11 @@ export function startCrawlLease(options: CrawlLeaseOptions): CrawlLease {
 
   // A resume right after a kill -9: the dead owner's heartbeat is still fresh,
   // so the CAS above yields. A same-host owner whose pid is gone is dead for
-  // certain, so take over at once (CAS on the pid we just read).
+  // certain, so take over at once (CAS on the pid we just read). Caveat: the
+  // pid probe only sees this machine's pid namespace, so two containers sharing
+  // a host name and a database file cannot see each other's pids and would read
+  // a live owner as dead. Not a supported setup (SQLite WAL needs one kernel);
+  // the retirement side is bounded by the same 24 h cap.
   const takeOverDeadOwner = (id: string): boolean => {
     if (!db) return false;
     const owner = db
