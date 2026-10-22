@@ -2,6 +2,7 @@
 // Runs in a signal handler, so it must be best-effort and scoped to crawls this
 // process started.
 
+import { startCrawlLease } from "@squirrelscan/crawler";
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Effect } from "effect";
@@ -84,6 +85,53 @@ describe("stopInterruptedCrawls", () => {
     expect(statusOf(done)).toBe("analyzed");
     // Already stopped: a second signal changes nothing.
     expect(stopInterruptedCrawls(dbPath)).toBe(0);
+  });
+
+  test("drops this process's crawl lease, and only this process's (#946)", async () => {
+    const { mine } = await seed();
+    const set = (pid: number) => {
+      const db = new Database(dbPath);
+      db.prepare(
+        "UPDATE crawls SET owner_pid = ?, owner_host = 'h', heartbeat_at = 9 WHERE id = ?"
+      ).run(pid, mine);
+      db.close();
+    };
+    const ownerOf = () => {
+      const db = new Database(dbPath);
+      const row = db
+        .prepare("SELECT owner_pid, heartbeat_at FROM crawls WHERE id = ?")
+        .get(mine) as { owner_pid: number | null; heartbeat_at: number };
+      db.close();
+      return row;
+    };
+    registerOwnedCrawl(() => mine);
+
+    set(process.pid + 1);
+    stopInterruptedCrawls(dbPath);
+    expect(ownerOf().owner_pid).toBe(process.pid + 1);
+
+    set(process.pid);
+    stopInterruptedCrawls(dbPath);
+    expect(ownerOf()).toEqual({ owner_pid: null, heartbeat_at: 9 });
+  });
+
+  test("a live heartbeat cannot re-assert the lease after the signal path (#946)", async () => {
+    const { mine } = await seed();
+    const lease = startCrawlLease({
+      dbPath,
+      getCrawlId: () => mine,
+      heartbeatMs: 10,
+    });
+    registerOwnedCrawl(() => mine);
+    stopInterruptedCrawls(dbPath);
+    await Bun.sleep(80);
+    expect(lease.beat()).toBe(false);
+    const db = new Database(dbPath);
+    const row = db
+      .prepare("SELECT owner_pid FROM crawls WHERE id = ?")
+      .get(mine) as { owner_pid: number | null };
+    db.close();
+    expect(row.owner_pid).toBeNull();
   });
 
   test("no owned crawl yet (still before the crawl started) is a no-op", async () => {
