@@ -455,6 +455,9 @@ export function parseDeclarations(css: string): Declarations {
   return decls;
 }
 
+/** Deepest at-rule nesting whose chain a rule keeps (`RawRule.at`); real themes nest 1 to 3. */
+const MAX_AT_DEPTH = 8;
+
 /** One style rule lifted out of a sheet, with whether an at-rule encloses it. */
 export interface RawRule {
   selector: string;
@@ -467,6 +470,8 @@ export interface RawRule {
    * untrustworthy instead.
    */
   conditional: boolean;
+  /** The preludes of the enclosing at-rules, outermost first (`@media (min-width: 990px)`); set when `conditional`. */
+  at?: readonly string[];
 }
 
 /**
@@ -485,6 +490,7 @@ export function parseRules(css: string, maxRules: number): RawRule[] {
   let i = 0;
   let preludeStart = 0;
   let atDepth = 0;
+  const atStack: string[] = [];
   // Blocks open in the current prelude (`:not(…`, `[…`).
   const closers: string[] = [];
 
@@ -515,7 +521,10 @@ export function parseRules(css: string, maxRules: number): RawRule[] {
       continue;
     }
     if (ch === "}") {
-      if (atDepth > 0) atDepth--;
+      if (atDepth > 0) {
+        atDepth--;
+        atStack.pop();
+      }
       i++;
       preludeStart = i;
       continue;
@@ -532,6 +541,7 @@ export function parseRules(css: string, maxRules: number): RawRule[] {
     // inside as conditional rather than skipping past it.
     if (prelude.startsWith("@")) {
       atDepth++;
+      atStack.push(prelude);
       i++;
       preludeStart = i;
       continue;
@@ -563,6 +573,8 @@ export function parseRules(css: string, maxRules: number): RawRule[] {
       selector: prelude,
       body: css.slice(bodyStart, bodyClosers.length === 0 ? j - 1 : css.length),
       conditional: atDepth > 0,
+      // Capped: a rule nested deeper is read as generic conditional, and the copy stays O(1) (pub#988).
+      ...(atDepth > 0 && atStack.length <= MAX_AT_DEPTH ? { at: atStack.slice() } : {}),
     });
     i = j;
     preludeStart = i;
