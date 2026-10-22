@@ -17,6 +17,11 @@ How it works:
 
 ## [Unreleased]
 
+### Changed
+
+- content: `word-count` skips pages kept out of search (`noindex` meta or `X-Robots-Tag`), like `core/meta-title`, `core/meta-description` and `core/h1`: a login, sign-up or dashboard page is short by design. The page gets one skipped check naming the source, and nothing is skipped on a staging or preview site whose homepage is noindex (#841).
+
+
 ## v0.0.127 (2026-10-22)
 
 Custom request headers stay with the audited origin unless you name another host, the default rule time budget doubles, and a smart audit keeps findings it did not get to re-check.
