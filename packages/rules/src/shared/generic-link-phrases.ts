@@ -20,12 +20,12 @@ const PHRASES: Readonly<Record<string, readonly string[]>> = {
   fr: [
     "cliquez ici", "clique ici", "cliquer ici", "ici", "en savoir plus", "lire la suite",
     "lire plus", "plus", "voir plus", "plus d'infos", "plus d'informations", "lien", "continuer",
-    "suite", "savoir plus", "voir les détails", "plus de détails",
+    "savoir plus", "voir les détails", "plus de détails",
   ],
   de: [
     "hier klicken", "klicken sie hier", "klick hier", "hier", "mehr", "mehr lesen",
     "weiterlesen", "mehr erfahren", "mehr anzeigen", "mehr infos", "mehr informationen",
-    "weiter", "link", "hier lesen", "details ansehen",
+    "link", "hier lesen", "details ansehen",
   ],
   pt: [
     "clique aqui", "clica aqui", "aqui", "leia mais", "ler mais", "saiba mais", "mais",
@@ -33,11 +33,11 @@ const PHRASES: Readonly<Record<string, readonly string[]>> = {
   ],
   it: [
     "clicca qui", "clicca qua", "qui", "qua", "leggi di più", "leggi tutto", "leggi altro",
-    "scopri di più", "altro", "di più", "continua", "link", "maggiori informazioni",
+    "scopri di più", "di più", "continua", "link", "maggiori informazioni",
     "per saperne di più", "vai", "maggiori dettagli",
   ],
   nl: [
-    "klik hier", "hier", "lees meer", "meer", "meer info", "meer informatie", "verder",
+    "klik hier", "hier", "lees meer", "meer", "meer info", "meer informatie",
     "link", "lees verder", "bekijk meer", "meer weten", "meer details",
   ],
   ja: [
@@ -58,7 +58,7 @@ const PHRASES: Readonly<Record<string, readonly string[]>> = {
   ru: [
     "нажмите здесь", "кликните здесь", "щёлкните здесь", "здесь", "тут", "читать далее",
     "читать больше", "читать дальше", "подробнее", "узнать больше", "больше", "далее",
-    "ссылка", "узнать подробнее", "показать больше", "продолжить",
+    "ссылка", "узнать подробнее", "показать больше",
   ],
 };
 
@@ -66,15 +66,22 @@ const SETS: Readonly<Record<string, ReadonlySet<string>>> = Object.fromEntries(
   Object.entries(PHRASES).map(([lang, list]) => [lang, new Set(list.map(normalizeLinkLabel))]),
 );
 
+/** Three-letter codes some pages use for the same languages. */
+const ISO_639_2: Readonly<Record<string, string>> = {
+  spa: "es", fra: "fr", fre: "fr", deu: "de", ger: "de", por: "pt", ita: "it", nld: "nl", dut: "nl",
+  jpn: "ja", zho: "zh", chi: "zh", kor: "ko", rus: "ru",
+};
+
 /** The primary subtag of an `<html lang>` value, lower-cased; "" when there is none. */
 export function primaryLangSubtag(lang: string | null | undefined): string {
   const m = /^\s*([a-zA-Z]{2,3})(?:[-_]|\s*$)/.exec(lang ?? "");
-  return m ? (m[1] as string).toLowerCase() : "";
+  const tag = m ? (m[1] as string).toLowerCase() : "";
+  return ISO_639_2[tag] ?? tag;
 }
 
 /** Whether the page language has a generic phrase list beyond English. */
 export function hasGenericPhrases(lang: string | null | undefined): boolean {
-  return primaryLangSubtag(lang) in SETS;
+  return Object.hasOwn(SETS, primaryLangSubtag(lang));
 }
 
 /**
@@ -83,7 +90,8 @@ export function hasGenericPhrases(lang: string | null | undefined): boolean {
  * own list; this covers the page language only.
  */
 export function isGenericInPageLanguage(text: string, lang: string | null | undefined): boolean {
-  const set = SETS[primaryLangSubtag(lang)];
+  const key = primaryLangSubtag(lang);
+  const set = Object.hasOwn(SETS, key) ? SETS[key] : undefined;
   if (!set) return false;
   const normalized = normalizeLinkLabel(text);
   return normalized.length > 0 && set.has(normalized) && !isConventionalLinkLabel(normalized);

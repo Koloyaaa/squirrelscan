@@ -96,6 +96,38 @@ for (const [id, rule, name] of RULES) {
   });
 }
 
+describe("review trims (pub#840)", () => {
+  test("ambiguous pager and wizard words are not generic", () => {
+    for (const [lang, text] of [
+      ["de", "Weiter »"], ["de", "Weiter"], ["fr", "Suite"], ["ru", "Продолжить"], ["it", "Altro"], ["nl", "Verder"],
+    ] as const) {
+      for (const [, rule, name] of RULES) expect(reported(rule, name, lang, text)).toBe(false);
+    }
+  });
+
+  test("only the primary html lang is read: a nested lang is ignored, other-language text under another lang is not reported", () => {
+    const url = "https://example.com/";
+    const html = '<!doctype html><html lang="en"><head><title>t</title></head><body><div lang="fr"><a href="/a">En savoir plus</a></div><a href="/b">Cliquez ici</a></body></html>';
+    for (const [, rule, name] of RULES) {
+      const out = rule.run({
+        page: { url, html, statusCode: 200, loadTime: 0, headers: {} },
+        parsed: parsePage(html, url) as ParsedPage,
+        options: {},
+      } as RuleContext).checks as CheckResult[];
+      expect(out.some((c) => c.name === name && c.status !== "pass")).toBe(false);
+    }
+  });
+
+  test("three-letter codes map, and prototype names never match", () => {
+    for (const [code, lang] of [["deu", "de"], ["fra", "fr"], ["jpn", "ja"], ["spa", "es"], ["por", "pt"], ["ita", "it"], ["nld", "nl"], ["zho", "zh"], ["kor", "ko"], ["rus", "ru"]] as const) {
+      expect(primaryLangSubtag(code)).toBe(lang);
+    }
+    expect(isGenericInPageLanguage("mehr", "deu")).toBe(true);
+    expect(isGenericInPageLanguage("mehr", "constructor")).toBe(false);
+    expect(isGenericInPageLanguage("mehr", "toString")).toBe(false);
+  });
+});
+
 describe("generic-link-phrases helpers", () => {
   test("primary subtag", () => {
     expect(primaryLangSubtag("zh-Hant-TW")).toBe("zh");
