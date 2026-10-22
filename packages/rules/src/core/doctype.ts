@@ -2,6 +2,7 @@
 // Aligns with Lighthouse doctype audit
 
 import type { CheckResult, Rule, RuleContext, RuleResult } from "../types";
+import { CHECK_NOT_APPLICABLE_SKIP_REASON } from "@squirrelscan/core-contracts/resolution";
 
 // BOM (Byte Order Mark) characters that may appear at start of file
 // eslint-disable-next-line no-control-regex
@@ -33,7 +34,8 @@ export const doctypeRule: Rule = {
         name: "doctype",
         status: "skipped",
         message: "No HTML content available",
-        skipReason: "Empty response",
+        skipReason: CHECK_NOT_APPLICABLE_SKIP_REASON,
+        details: { foldKey: CHECK_NOT_APPLICABLE_SKIP_REASON },
       });
       return { checks };
     }

@@ -11,7 +11,7 @@ import { z } from "zod";
 
 import type { Document, Element } from "linkedom";
 
-import { SCAN_TRUNCATED_SKIP_REASON } from "@squirrelscan/core-contracts/resolution";
+import { CHECK_NOT_APPLICABLE_SKIP_REASON, SCAN_TRUNCATED_SKIP_REASON } from "@squirrelscan/core-contracts/resolution";
 
 import { skipComment, skipString, stepBlocks, stripComments } from "../shared/css-tokens";
 import type { CheckResult, Rule, RuleContext, RuleResult } from "../types";
@@ -1159,7 +1159,8 @@ export const hiddenTextRule: Rule = {
         name: "hidden-text",
         status: "skipped",
         message: "No body content to analyze",
-        skipReason: "no-body",
+        skipReason: CHECK_NOT_APPLICABLE_SKIP_REASON,
+        details: { foldKey: CHECK_NOT_APPLICABLE_SKIP_REASON },
       });
       return { checks };
     }

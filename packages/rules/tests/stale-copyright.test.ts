@@ -85,13 +85,13 @@ describe("staleCopyrightRule", () => {
   test("no footer at all is skipped, not passed", () => {
     const [check] = run("<main><p>© 2024 Acme</p></main>");
     expect(check?.status).toBe("skipped");
-    expect(check?.skipReason).toBe("no-footer");
+    expect(check?.skipReason).toBe("not-applicable");
   });
 
   test("a footer with no copyright notice is skipped", () => {
     const [check] = run("<footer><a href='/privacy'>Privacy</a></footer>");
     expect(check?.status).toBe("skipped");
-    expect(check?.skipReason).toBe("no-copyright-year");
+    expect(check?.skipReason).toBe("not-applicable");
   });
 
   // The false-positive that would make this rule unshippable: a historical year in

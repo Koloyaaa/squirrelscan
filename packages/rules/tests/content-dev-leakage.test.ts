@@ -434,7 +434,7 @@ describe("devLeakageRule outcomes", () => {
       }),
     );
     expect(check.status).toBe("skipped");
-    expect(check.skipReason).toBe("non-production-origin");
+    expect(check.skipReason).toBe("not-applicable");
   });
 
   test("skipped: the audit is of a local dev server", () => {
@@ -444,7 +444,7 @@ describe("devLeakageRule outcomes", () => {
       }),
     );
     expect(check.status).toBe("skipped");
-    expect(check.skipReason).toBe("non-production-origin");
+    expect(check.skipReason).toBe("not-applicable");
   });
 
   test("skipped: the seed is a staging tier even when this page redirected onto the apex", () => {
@@ -480,7 +480,7 @@ describe("devLeakageRule outcomes", () => {
       }),
     );
     expect(check.status).toBe("skipped");
-    expect(check.skipReason).toBe("non-production-origin");
+    expect(check.skipReason).toBe("not-applicable");
   });
 
   test("the redirected-to URL decides whether the page is secure", () => {

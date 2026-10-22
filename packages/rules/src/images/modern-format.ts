@@ -3,6 +3,7 @@
 import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
 
 import { querySelectorAllOutsideNoscript } from "@squirrelscan/utils";
+import { CHECK_NOT_APPLICABLE_SKIP_REASON } from "@squirrelscan/core-contracts/resolution";
 
 export const modernFormatRule: Rule = {
   meta: {
@@ -31,6 +32,8 @@ export const modernFormatRule: Rule = {
         name: "modern-format",
         status: "skipped",
         message: "No images found",
+        skipReason: CHECK_NOT_APPLICABLE_SKIP_REASON,
+        details: { foldKey: CHECK_NOT_APPLICABLE_SKIP_REASON },
       });
       return { checks };
     }

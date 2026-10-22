@@ -19,6 +19,7 @@ How it works:
 
 ### Fixed
 
+- A smart audit now closes a finding on a page the check no longer applies to (a page with no images, no form fields, no `Link` header, no body, a page below the minimum size) instead of carrying it forever. Those rules skip with a shared `not-applicable` reason that the resolution signal and the local and cloud merges read as evaluated and clean, and a check that did not run (no timing data, a scan stopped at its work cap) still carries its finding. Each such skip also carries `details.foldKey: not-applicable`, so a folded row never mixes with a gap (#1011).
 - a11y: a page past the style reader's limits (more than 5,000 style rules, an over-long `<style>` block or selector, a no-break or other non-ASCII space in a style block, or a rule nested inside another) now reads every element as unconfirmed for what a style might hide, instead of as shown. Before, the rules past the limit were dropped, so an element they hid could read as shown and an unnamed control inside it failed; now the naming checks report `<check>-unconfirmed` there. A page under the limits reads as before (#1015).
 
 ## v0.0.127 (2026-10-22)

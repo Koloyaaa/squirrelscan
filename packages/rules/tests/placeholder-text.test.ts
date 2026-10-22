@@ -363,7 +363,7 @@ describe("placeholderTextRule", () => {
     } as RuleContext;
     const [check] = placeholderTextRule.run(ctx).checks;
     expect(check?.status).toBe("skipped");
-    expect(check?.skipReason).toBe("no-body");
+    expect(check?.skipReason).toBe("not-applicable");
   });
 });
 

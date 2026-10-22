@@ -13,6 +13,7 @@ import type { CheckItem } from "@squirrelscan/core-contracts";
 import { getRenderedProseText } from "./text-content";
 
 import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
+import { CHECK_NOT_APPLICABLE_SKIP_REASON } from "@squirrelscan/core-contracts/resolution";
 
 export type PlaceholderKind =
   | "lorem-ipsum"
@@ -633,7 +634,8 @@ export const placeholderTextRule: Rule = {
         name: "placeholder-content",
         status: "skipped",
         message: "No body element to read visible text from",
-        skipReason: "no-body",
+        skipReason: CHECK_NOT_APPLICABLE_SKIP_REASON,
+        details: { foldKey: CHECK_NOT_APPLICABLE_SKIP_REASON },
       });
       checks.push(...titleCheck);
       return { checks };

@@ -1,6 +1,7 @@
 // analytics/consent-mode - Google Consent Mode check
 
 import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
+import { CHECK_NOT_APPLICABLE_SKIP_REASON } from "@squirrelscan/core-contracts/resolution";
 
 export const consentModeRule: Rule = {
   meta: {
@@ -45,6 +46,8 @@ export const consentModeRule: Rule = {
         name: "consent-mode",
         status: "skipped",
         message: "No Google tags detected (consent mode not applicable)",
+        skipReason: CHECK_NOT_APPLICABLE_SKIP_REASON,
+        details: { foldKey: CHECK_NOT_APPLICABLE_SKIP_REASON },
       });
       return { checks };
     }

@@ -2,6 +2,7 @@
 
 import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
 import { getTextExcludingScripts } from "./text-content";
+import { CHECK_NOT_APPLICABLE_SKIP_REASON } from "@squirrelscan/core-contracts/resolution";
 
 export const readingLevelRule: Rule = {
   meta: {
@@ -29,6 +30,8 @@ export const readingLevelRule: Rule = {
         name: "reading-level",
         status: "skipped",
         message: "No body content to analyze",
+        skipReason: CHECK_NOT_APPLICABLE_SKIP_REASON,
+        details: { foldKey: CHECK_NOT_APPLICABLE_SKIP_REASON },
       });
       return { checks };
     }

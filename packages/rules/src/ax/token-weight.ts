@@ -1,6 +1,7 @@
 // ax/token-weight - per-page raw-HTML token estimate + text-to-HTML ratio
 
 import type { CheckResult, Rule, RuleContext, RuleResult } from "../types";
+import { CHECK_NOT_APPLICABLE_SKIP_REASON } from "@squirrelscan/core-contracts/resolution";
 
 // Below this, a page is almost certainly a redirect, error stub, or otherwise
 // too small to say anything meaningful about its content-to-markup ratio.
@@ -43,7 +44,8 @@ export const tokenWeightRule: Rule = {
         name: "token-weight",
         status: "skipped",
         message: "Page too small (or not a real content page) to assess token weight",
-        skipReason: "below minimum size",
+        skipReason: CHECK_NOT_APPLICABLE_SKIP_REASON,
+        details: { foldKey: CHECK_NOT_APPLICABLE_SKIP_REASON },
       });
       return { checks };
     }
