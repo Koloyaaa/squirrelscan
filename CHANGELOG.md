@@ -17,6 +17,10 @@ How it works:
 
 ## [Unreleased]
 
+### Added
+
+- content: new rule `content/h1-title-alignment` warns when a page's H1 and `<title>` share no meaningful word (stopwords, stemming and the brand affix are read out; both strings are shown). It is info on the homepage and when the two are identical, skips pages with no or several H1s, noindex pages, titles that are only the brand, and languages without a stopword list (English, Spanish, French, German, Portuguese, Italian and Dutch are read) (#929).
+
 ### Fixed
 
 - a11y: a page past the style reader's limits (more than 5,000 style rules, an over-long `<style>` block or selector, a no-break or other non-ASCII space in a style block, or a rule nested inside another) now reads every element as unconfirmed for what a style might hide, instead of as shown. Before, the rules past the limit were dropped, so an element they hid could read as shown and an unnamed control inside it failed; now the naming checks report `<check>-unconfirmed` there. A page under the limits reads as before (#1015).
