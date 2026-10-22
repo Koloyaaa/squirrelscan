@@ -17,6 +17,10 @@ How it works:
 
 ## [Unreleased]
 
+### Changed
+
+- Retention and `self disk --prune` now read the crawl lease that v0.0.127 started writing (#946). A crawl whose heartbeat is under 5 minutes old, or whose owner process is still alive on this machine (for up to 24 hours), is never retired, including when a later audit of the same project finishes first. A killed crawl (`kill -9`, a crash) is retired by the next audit and by `--prune` once its heartbeat is 5 minutes old, without waiting for a later audit to finish; a killed `running` crawl, which `--resume` continues, waits 24 hours unless a newer audit has finished and it has been idle for 30 minutes, as before. An owner on another host or one that cannot be read counts as live until the 5 minutes pass, and the check runs again inside the retiring transaction. Crawls written by older versions have no lease and follow the previous rules, and `--prune --dry-run` shows a held crawl's owner pid and last heartbeat. A `--resume` after a kill takes the lease over at once when the old owner's process is gone.
+
 ## v0.0.127 (2026-10-22)
 
 Custom request headers stay with the audited origin unless you name another host, the default rule time budget doubles, and a smart audit keeps findings it did not get to re-check.
