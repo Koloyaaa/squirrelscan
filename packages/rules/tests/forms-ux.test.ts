@@ -128,7 +128,7 @@ describe("a11y/autocomplete-tokens", () => {
     </form>`);
     const result = check(autocompleteTokensRule.run(ctx(html)).checks, "autocomplete-tokens");
     expect(result?.status).toBe("skipped");
-    expect(result?.skipReason).toBe("not-applicable");
+    expect(result?.skipReason).toBe("no-identifiable-fields");
   });
 
   test("warn: autocomplete=off on a payment field is not an accepted answer", () => {
@@ -398,7 +398,7 @@ describe("a11y/input-types — the right type", () => {
     );
     const result = check(inputTypesRule.run(ctx(html)).checks, "input-types");
     expect(result?.status).toBe("skipped");
-    expect(result?.skipReason).toBe("not-applicable");
+    expect(result?.skipReason).toBe("no-typed-inputs");
   });
 });
 
@@ -427,7 +427,7 @@ describe("a11y/input-types — enterkeyhint", () => {
     </form>`);
     const result = check(inputTypesRule.run(ctx(html)).checks, "enterkeyhint");
     expect(result?.status).toBe("skipped");
-    expect(result?.skipReason).toBe("not-applicable");
+    expect(result?.skipReason).toBe("no-multi-field-forms");
   });
 
   test("submit buttons and hidden inputs do not pad a form to multi-field", () => {

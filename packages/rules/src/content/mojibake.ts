@@ -5,7 +5,6 @@ import { getAttrCI, querySelectorByAttrValueCI } from "@squirrelscan/utils";
 import { getRenderedProseText } from "./text-content";
 
 import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
-import { CHECK_NOT_APPLICABLE_SKIP_REASON } from "@squirrelscan/core-contracts/resolution";
 
 /**
  * UTF-8 bytes decoded as latin1/cp1252. Every one of these is a real UTF-8 lead byte
@@ -135,8 +134,7 @@ export const mojibakeRule: Rule = {
         name: "encoding-corruption",
         status: "skipped",
         message: "No body element to read visible text from",
-        skipReason: CHECK_NOT_APPLICABLE_SKIP_REASON,
-        details: { foldKey: CHECK_NOT_APPLICABLE_SKIP_REASON },
+        skipReason: "no-body",
       });
       return { checks };
     }

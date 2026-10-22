@@ -102,8 +102,7 @@ export const staleCopyrightRule: Rule = {
         name: "footer-copyright-year",
         status: "skipped",
         message: "No footer or site-chrome region found on this page",
-        skipReason: CHECK_NOT_APPLICABLE_SKIP_REASON,
-        details: { foldKey: CHECK_NOT_APPLICABLE_SKIP_REASON },
+        skipReason: "no-footer",
       });
       return { checks };
     }

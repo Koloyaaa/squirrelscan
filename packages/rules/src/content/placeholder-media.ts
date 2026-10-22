@@ -11,7 +11,6 @@ import type { CheckItem } from "@squirrelscan/core-contracts";
 import { querySelectorAllOutsideNoscript } from "@squirrelscan/utils";
 
 import type { CheckResult, Rule, RuleContext, RuleResult } from "../types";
-import { CHECK_NOT_APPLICABLE_SKIP_REASON } from "@squirrelscan/core-contracts/resolution";
 
 export type PlaceholderMediaKind = "placeholder-source" | "blank-pixel" | "camera-alt";
 
@@ -208,8 +207,7 @@ export const placeholderMediaRule: Rule = {
         name: "placeholder-media",
         status: "skipped",
         message: "No images on the page",
-        skipReason: CHECK_NOT_APPLICABLE_SKIP_REASON,
-        details: { foldKey: CHECK_NOT_APPLICABLE_SKIP_REASON },
+        skipReason: "no-images",
       });
       return { checks };
     }

@@ -105,6 +105,6 @@ describe("content/dev-leakage — links to local-only names (pub#813)", () => {
       "http://myapp.test/",
     );
     expect(check.status).toBe("skipped");
-    expect(check.skipReason).toBe("not-applicable");
+    expect(check.skipReason).toBe("non-production-origin");
   });
 });

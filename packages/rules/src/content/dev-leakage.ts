@@ -10,7 +10,7 @@ import { getDomain } from "tldts";
 
 import type { Element } from "linkedom";
 
-import { CHECK_NOT_APPLICABLE_SKIP_REASON, SCAN_TRUNCATED_SKIP_REASON } from "@squirrelscan/core-contracts/resolution";
+import { SCAN_TRUNCATED_SKIP_REASON } from "@squirrelscan/core-contracts/resolution";
 import { isNonPublicHostname } from "@squirrelscan/utils/non-public-host";
 
 import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
@@ -700,8 +700,7 @@ export const devLeakageRule: Rule = {
         name,
         status: "skipped",
         message: `Audited origin is itself a non-production host (${nonProductionHost}), so its own URLs are not leakage`,
-        skipReason: CHECK_NOT_APPLICABLE_SKIP_REASON,
-        details: { foldKey: CHECK_NOT_APPLICABLE_SKIP_REASON },
+        skipReason: "non-production-origin",
       });
       return { checks };
     }

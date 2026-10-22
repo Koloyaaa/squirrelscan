@@ -5,7 +5,6 @@ import { z } from "zod";
 
 import type { Rule, RuleContext, RuleResult, CheckResult, ParsedPage } from "../types";
 import { getTextExcludingScripts } from "./text-content";
-import { CHECK_NOT_APPLICABLE_SKIP_REASON } from "@squirrelscan/core-contracts/resolution";
 
 export const optionsSchema = z.object({
   density_threshold: z.number().default(3).describe("Keyword density percentage threshold"),
@@ -97,8 +96,6 @@ export const keywordStuffingRule: Rule = {
         name: "keyword-stuffing",
         status: "skipped",
         message: "No body content to analyze",
-        skipReason: CHECK_NOT_APPLICABLE_SKIP_REASON,
-        details: { foldKey: CHECK_NOT_APPLICABLE_SKIP_REASON },
       });
       return { checks };
     }

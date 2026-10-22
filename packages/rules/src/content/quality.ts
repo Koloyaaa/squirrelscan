@@ -6,7 +6,6 @@ import { stripHtmlForText } from "@squirrelscan/utils";
 import type { CheckResult, Rule, RuleContext, RuleResult } from "../types";
 
 import { isLLMAvailable, llmCallWithSystem } from "../tools";
-import { CHECK_NOT_APPLICABLE_SKIP_REASON } from "@squirrelscan/core-contracts/resolution";
 
 const QualitySchema = z.object({
   score: z.number().min(0).max(100),
@@ -88,8 +87,7 @@ export const contentQualityRule: Rule = {
         name: "content-quality",
         status: "skipped",
         message: "No content to analyze",
-        skipReason: CHECK_NOT_APPLICABLE_SKIP_REASON,
-        details: { foldKey: CHECK_NOT_APPLICABLE_SKIP_REASON },
+        skipReason: "Page has no text content",
       });
       return { checks };
     }

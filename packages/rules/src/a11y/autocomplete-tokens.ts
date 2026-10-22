@@ -13,7 +13,6 @@ import {
   segmentsOf,
 } from "../shared/form-fields";
 import type { CheckResult, Rule, RuleContext, RuleResult } from "../types";
-import { CHECK_NOT_APPLICABLE_SKIP_REASON } from "@squirrelscan/core-contracts/resolution";
 
 /** One field that carries the wrong token, or none at all. */
 interface Offender {
@@ -185,8 +184,7 @@ export const autocompleteTokensRule: Rule = {
         name: "autocomplete-tokens",
         status: "skipped",
         message: "No name, email, phone, address or payment fields found",
-        skipReason: CHECK_NOT_APPLICABLE_SKIP_REASON,
-        details: { foldKey: CHECK_NOT_APPLICABLE_SKIP_REASON },
+        skipReason: "no-identifiable-fields",
       });
       return { checks };
     }

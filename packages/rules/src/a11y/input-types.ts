@@ -164,8 +164,7 @@ export const inputTypesRule: Rule = {
         name: "input-types",
         status: "skipped",
         message: "No inputs with an evident type found",
-        skipReason: CHECK_NOT_APPLICABLE_SKIP_REASON,
-        details: { foldKey: CHECK_NOT_APPLICABLE_SKIP_REASON },
+        skipReason: "no-typed-inputs",
       });
     } else if (hostileNumber.length > 0) {
       checks.push({
@@ -217,8 +216,7 @@ export const inputTypesRule: Rule = {
         name: "enterkeyhint",
         status: "skipped",
         message: `No forms with ${MULTI_FIELD_THRESHOLD} or more fields found`,
-        skipReason: CHECK_NOT_APPLICABLE_SKIP_REASON,
-        details: { foldKey: CHECK_NOT_APPLICABLE_SKIP_REASON },
+        skipReason: "no-multi-field-forms",
       });
     } else if (withoutHint.length > 0) {
       checks.push({

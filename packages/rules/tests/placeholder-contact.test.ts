@@ -140,7 +140,7 @@ describe("placeholderContactRule", () => {
   test("skipped without a body", () => {
     const [c] = run("<html></html>");
     expect(c!.status).toBe("skipped");
-    expect(c!.skipReason).toBe("not-applicable");
+    expect(c!.skipReason).toBe("no-body");
   });
 
   test("skipped on a documentation page", () => {

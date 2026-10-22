@@ -1,7 +1,6 @@
 // images/figure-figcaption - Figure and figcaption check
 
 import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
-import { CHECK_NOT_APPLICABLE_SKIP_REASON } from "@squirrelscan/core-contracts/resolution";
 
 export const figureFigcaptionRule: Rule = {
   meta: {
@@ -30,8 +29,6 @@ export const figureFigcaptionRule: Rule = {
         name: "figure-figcaption",
         status: "skipped",
         message: "No images or figures found",
-        skipReason: CHECK_NOT_APPLICABLE_SKIP_REASON,
-        details: { foldKey: CHECK_NOT_APPLICABLE_SKIP_REASON },
       });
       return { checks };
     }

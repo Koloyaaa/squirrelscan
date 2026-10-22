@@ -335,7 +335,7 @@ describe("unrenderedMarkupRule", () => {
     };
     const checks = unrenderedMarkupRule.run(ctx).checks;
     expect(checks[0]?.status).toBe("skipped");
-    expect(checks[0]?.skipReason).toBe("not-applicable");
+    expect(checks[0]?.skipReason).toBe("no-body");
   });
 
   test("the message names a real example, flattened to one line", () => {

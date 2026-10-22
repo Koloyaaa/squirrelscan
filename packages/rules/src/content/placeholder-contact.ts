@@ -208,8 +208,7 @@ export const placeholderContactRule: Rule = {
         name: "placeholder-contact",
         status: "skipped",
         message: "No body element to read visible text from",
-        skipReason: CHECK_NOT_APPLICABLE_SKIP_REASON,
-        details: { foldKey: CHECK_NOT_APPLICABLE_SKIP_REASON },
+        skipReason: "no-body",
       });
       return { checks };
     }

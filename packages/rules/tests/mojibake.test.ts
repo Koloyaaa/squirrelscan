@@ -200,7 +200,7 @@ describe("mojibakeRule", () => {
   test("no body is skipped, not passed", () => {
     const [check] = run("<html><head><meta charset='utf-8'></head></html>");
     expect(check?.status).toBe("skipped");
-    expect(check?.skipReason).toBe("not-applicable");
+    expect(check?.skipReason).toBe("no-body");
   });
 
   test("no document is skipped", () => {

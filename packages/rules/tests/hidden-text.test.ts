@@ -78,7 +78,7 @@ describe("content/hidden-text — outcomes", () => {
       options: {},
     } as unknown as RuleContext).checks[0];
     expect(check.status).toBe("skipped");
-    expect(check.skipReason).toBe("not-applicable");
+    expect(check.skipReason).toBe("no-body");
   });
 
   test("warn: hidden text without links stays a warning", () => {

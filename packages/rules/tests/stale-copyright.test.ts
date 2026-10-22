@@ -85,7 +85,7 @@ describe("staleCopyrightRule", () => {
   test("no footer at all is skipped, not passed", () => {
     const [check] = run("<main><p>© 2024 Acme</p></main>");
     expect(check?.status).toBe("skipped");
-    expect(check?.skipReason).toBe("not-applicable");
+    expect(check?.skipReason).toBe("no-footer");
   });
 
   test("a footer with no copyright notice is skipped", () => {

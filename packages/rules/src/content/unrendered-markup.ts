@@ -7,7 +7,6 @@ import type { Element } from "linkedom";
 import type { Rule, RuleContext, RuleResult, CheckResult } from "../types";
 
 import { sharedRegex } from "../shared-regex";
-import { CHECK_NOT_APPLICABLE_SKIP_REASON } from "@squirrelscan/core-contracts/resolution";
 /** Never read by a visitor at all. */
 const SCRIPT_LIKE_TAGS = ["script", "style", "noscript", "template"] as const;
 
@@ -528,8 +527,7 @@ export const unrenderedMarkupRule: Rule = {
         name: "unrendered-markup",
         status: "skipped",
         message: "No body element to read visible text from",
-        skipReason: CHECK_NOT_APPLICABLE_SKIP_REASON,
-        details: { foldKey: CHECK_NOT_APPLICABLE_SKIP_REASON },
+        skipReason: "no-body",
       });
       return { checks };
     }
