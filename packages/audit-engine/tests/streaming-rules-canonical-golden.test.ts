@@ -174,8 +174,10 @@ describe("runStreamingRules — canonical 518-page v1↔v2 merge gate", () => {
       // whole-crawl check (#709). It passes: the synthetic copy has no listed
       // misspelling or doubled word, so healthScore.overall is unmoved at 51.
       // 101743 -> 102243: content/h1-title-alignment is page-scoped and adds one
-      // check to each of the 500 pages that have a document (#929). The rows are
-      // skips and passes on synthetic copy, and healthScore.overall is unmoved at 51.
+      // check to each of the 500 pages that have a document (#929): 459 pass, 31 info
+      // (an H1 and title with no shared word, about 6% of the synthetic copy, which
+      // is templated marketing text) and 10 skipped. Info never scores, so
+      // healthScore.overall is unmoved at 51.
       // Unmoved by pub#215/#216: content/mojibake now reads the rendered prose
       // content/placeholder-text reads, and the synthetic copy has no <template>
       // or code-editor markup and no mojibake for it to change; the new
