@@ -670,10 +670,22 @@
           {
             "group": "SEO",
             "pages": [
+              "glossary/anchor-text",
+              "glossary/broken-link",
+              "glossary/character-encoding",
+              "glossary/duplicate-content",
               "glossary/geo-meta-tags",
+              "glossary/heading-hierarchy",
+              "glossary/hreflang",
+              "glossary/internal-linking",
               "glossary/json-ld",
+              "glossary/meta-description",
+              "glossary/open-graph",
+              "glossary/orphan-page",
               "glossary/robots-txt",
-              "glossary/structured-data"
+              "glossary/structured-data",
+              "glossary/title-tag",
+              "glossary/url-slug"
             ]
           },
           {
