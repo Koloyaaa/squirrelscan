@@ -61,6 +61,7 @@ squirrel audit <url> [options]
 | `--probe-budget` | | Wall-clock cap for all probing in this run, such as `30s` or `2m` (max `1h`). Overrides `[security] budget` | `30s` active, `2m` aggressive |
 | `--pentest` | | Shortcut for `--level full --probe aggressive` | `false` |
 | `--summary` | | Print only the score, category breakdown, and issue counts — no per-issue detail. Console format only | `false` |
+| `--include-passed` | | Also list the rules that passed, with how many pages each passed on | `false` |
 
 ### Audit levels
 
@@ -362,6 +363,16 @@ This prints the header, health score, category breakdown, editor's summary
 (when present), and per-category issue counts, but skips individual rule
 findings and affected-page lists. Console format only — combine with a
 non-console `--format` and the command errors up front.
+
+### Passed rules
+
+Use `--include-passed` to list the rules that passed after the issues, with how many pages each passed on:
+
+```bash
+squirrel audit https://example.com --include-passed
+```
+
+It works with every `--format`. To list them for an audit you already ran, use [`squirrel report --include-passed`](/cli/report#list-what-passed).
 
 ### Verbose output
 

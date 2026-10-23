@@ -7,7 +7,12 @@ import { cacheReasonsLabel, cacheStatsSummaryLine } from "../cache-stats";
 import { refusedFetchLines, reportFailureReasonCode } from "../failure-notice";
 import { getScoreGrade } from "../scoring";
 import { REPORT_SOURCE_PAGES_PREVIEW, REPORT_PAGES_HARD_CAP } from "../constants";
-import { groupIssuesByCategory, flattenIssuesBySeverity } from "../grouping";
+import {
+  groupIssuesByCategory,
+  flattenIssuesBySeverity,
+  passedRuleScope,
+  reportPassedRules,
+} from "../grouping";
 import { entityMarkdownSection } from "../entities";
 import { groupTechnologies, techChangeSummary, techIconUrl } from "../technologies";
 import { SITE_PROFILE_NOTE, siteProfileFlags, siteProfileRows } from "../site-metadata";
@@ -49,6 +54,8 @@ export interface MarkdownRenderOptions {
   version?: string;
   /** White-label branding (#810) — Team orgs drop the squirrelscan header/footer. */
   branding?: ReportBranding;
+  /** List the rules that passed after the issues (`--include-passed`). */
+  includePassed?: boolean;
 }
 
 function escapeMarkdownTableCell(value: string, escapeBrackets = false): string {
@@ -550,6 +557,22 @@ export function renderMarkdown(report: AuditReport, options?: MarkdownRenderOpti
     lines.push("## Issues");
     lines.push("");
     lines.push("No issues found.");
+    lines.push("");
+  }
+
+  const passedRules = reportPassedRules(report, options?.includePassed);
+  if (passedRules.length > 0) {
+    lines.push("## Passed");
+    lines.push("");
+    lines.push(`*${passedRules.length} rule${passedRules.length === 1 ? "" : "s"} with no issues*`);
+    lines.push("");
+    lines.push("| Rule | Category | Checked |");
+    lines.push("|------|----------|---------|");
+    for (const rule of passedRules) {
+      lines.push(
+        `| ${escapeMarkdownTableCell(rule.name)} \`${rule.id}\` | ${rule.categoryName} | ${passedRuleScope(rule)} |`,
+      );
+    }
     lines.push("");
   }
 

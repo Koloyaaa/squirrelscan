@@ -15,6 +15,8 @@ import {
   groupTechnologies,
   itemsNotListed,
   itemsNotListedLine,
+  passedRuleScope,
+  reportPassedRules,
   techChangeSummary,
   ENTITY_CONSOLE_LIMIT,
   ENTITY_EMPTY_MESSAGE,
@@ -91,6 +93,8 @@ export interface ConsoleReportOptions {
   /** #1066: when set, the run excluded some rule categories — print a
    * partial-audit notice under the header. */
   ruleFilter?: ConsoleRuleFilter;
+  /** List the rules that passed after the issues (`--include-passed`). */
+  includePassed?: boolean;
 }
 
 export function generateConsoleReport(
@@ -351,6 +355,24 @@ export function generateConsoleReport(
   } else {
     log("");
     log(fmt.green("✓ No issues found"));
+  }
+
+  const passedRules = reportPassedRules(report, opts.includePassed);
+  if (passedRules.length > 0) {
+    log("");
+    const ruleCount = `${passedRules.length} rule${passedRules.length === 1 ? "" : "s"}`;
+    log(fmt.bold(`PASSED ${fmt.dim(`(${ruleCount})`)}`));
+    let lastCategory: string | undefined;
+    for (const rule of passedRules) {
+      if (rule.categoryCode !== lastCategory) {
+        lastCategory = rule.categoryCode;
+        log("");
+        log(` ${fmt.bold(rule.categoryName)}`);
+      }
+      log(
+        `   ${icon("pass")} ${fmt.dim(rule.id)} ${rule.name} ${fmt.dim(`(${passedRuleScope(rule)})`)}`
+      );
+    }
   }
 
   // Footer

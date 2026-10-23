@@ -4,7 +4,7 @@ import type { ReportBranding } from "@squirrelscan/core-contracts";
 import type { AuditReport } from "../types";
 import { getScoreGrade } from "../scoring";
 import { getGroupName } from "../categories";
-import { groupIssuesByCategory, flattenIssuesBySeverity } from "../grouping";
+import { groupIssuesByCategory, flattenIssuesBySeverity, reportPassedRules } from "../grouping";
 import { affectedPages, itemsNotListed } from "../affected-pages";
 import { domainAgeYears } from "../site-metadata";
 import { editorSummaryView } from "../editor-summary";
@@ -16,6 +16,8 @@ export interface XmlRenderOptions {
   version?: string;
   /** White-label branding (#810) — Team orgs get a neutral `<audit>` root. */
   branding?: ReportBranding;
+  /** List the rules that passed after the issues (`--include-passed`). */
+  includePassed?: boolean;
 }
 
 function escapeXml(str: string): string {
@@ -252,6 +254,19 @@ export function renderXml(report: AuditReport, options?: XmlRenderOptions): stri
     lines.push(`${indent(1)}</issues>`);
   } else {
     lines.push(`${indent(1)}<issues/>`);
+  }
+
+  const passedRules = reportPassedRules(report, options?.includePassed);
+  if (passedRules.length > 0) {
+    lines.push(`${indent(1)}<passed count="${passedRules.length}">`);
+    for (const rule of passedRules) {
+      lines.push(
+        `${indent(2)}<rule id="${escapeXml(rule.id)}" category="${escapeXml(rule.categoryName)}" scope="${rule.scope}" pages="${rule.pages}">`,
+      );
+      lines.push(`${indent(3)}<name>${escapeXml(rule.name)}</name>`);
+      lines.push(`${indent(2)}</rule>`);
+    }
+    lines.push(`${indent(1)}</passed>`);
   }
 
   // repo#2729: checks this audit did not run. Not issues, and not clean either.

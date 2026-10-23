@@ -7,7 +7,12 @@ import { cacheReasonsLabel, cacheStatsSummaryLine } from "../cache-stats";
 import { refusedFetchLines, reportFailureReasonCode } from "../failure-notice";
 import { getScoreGrade } from "../scoring";
 import { REPORT_TEXT_WRAP_WIDTH } from "../constants";
-import { groupIssuesByCategory, flattenIssuesBySeverity } from "../grouping";
+import {
+  groupIssuesByCategory,
+  flattenIssuesBySeverity,
+  passedRuleScope,
+  reportPassedRules,
+} from "../grouping";
 import { affectedPages, itemsNotListed, itemsNotListedLine } from "../affected-pages";
 import {
   ENTITY_CONSOLE_LIMIT,
@@ -42,6 +47,8 @@ export interface TextRenderOptions {
   version?: string;
   /** White-label branding (#810) — Team orgs drop the squirrelscan header/footer. */
   branding?: ReportBranding;
+  /** List the rules that passed after the issues (`--include-passed`). */
+  includePassed?: boolean;
 }
 
 function pathOnly(url: string): string {
@@ -373,6 +380,22 @@ export function renderText(report: AuditReport, options?: TextRenderOptions): st
     // #792: don't claim "No issues found" for a 0-page failed/blocked run —
     // nothing was audited (state shown above), the site isn't necessarily clean.
     write("No issues found");
+    write("");
+  }
+
+  const passedRules = reportPassedRules(report, options?.includePassed);
+  if (passedRules.length > 0) {
+    write(`PASSED (${passedRules.length} rule${passedRules.length === 1 ? "" : "s"})`);
+    write("-".repeat(40));
+    let lastCategory: string | undefined;
+    for (const rule of passedRules) {
+      if (rule.categoryCode !== lastCategory) {
+        lastCategory = rule.categoryCode;
+        write("");
+        write(`[${rule.categoryName.toUpperCase()}]`);
+      }
+      write(`  ${rule.id} - ${rule.name} (${passedRuleScope(rule)})`);
+    }
     write("");
   }
 

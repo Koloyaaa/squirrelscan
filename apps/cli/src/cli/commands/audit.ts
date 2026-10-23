@@ -1187,6 +1187,11 @@ export const audit = defineCommand({
       description:
         "Print only the score, category breakdown, and issue counts, with no per-issue detail (console format only)",
     },
+    includePassed: {
+      type: "boolean",
+      description:
+        "Also list the rules that passed, with how many pages each passed on",
+    },
   },
   async run({ args, rawArgs }) {
     // Configure logging before any output
@@ -2723,27 +2728,44 @@ export const audit = defineCommand({
           `⚠ --rule-include/--rule-exclude active — this ${format} report is partial and does not mark itself as such (see #1082)`
         );
       }
+      const includePassed = args.includePassed ?? false;
       if (format === "console") {
         generateConsoleReport(report, {
           summaryOnly: args.summary,
+          includePassed,
           ...(ruleFilterActive ? { ruleFilter } : {}),
         });
       } else if (format === "text") {
-        generateTextReport(report, options.outputPath, reportBranding);
+        generateTextReport(
+          report,
+          options.outputPath,
+          reportBranding,
+          includePassed
+        );
       } else if (format === "json") {
         // stdout by default, file if -o provided
-        generateJsonReport(report, options.outputPath);
+        generateJsonReport(report, options.outputPath, includePassed);
       } else if (format === "html") {
         // file by default - HTML needs a browser
         const hostname = new URL(report.baseUrl).hostname;
         const htmlPath = options.outputPath ?? `${hostname}-report.html`;
-        generateHtmlReport(report, htmlPath, reportBranding);
+        generateHtmlReport(report, htmlPath, reportBranding, includePassed);
       } else if (format === "markdown") {
-        generateMarkdownReport(report, options.outputPath, reportBranding);
+        generateMarkdownReport(
+          report,
+          options.outputPath,
+          reportBranding,
+          includePassed
+        );
       } else if (format === "xml") {
-        generateXmlReport(report, options.outputPath, reportBranding);
+        generateXmlReport(
+          report,
+          options.outputPath,
+          reportBranding,
+          includePassed
+        );
       } else if (format === "llm") {
-        generateLlmReport(report, options.outputPath);
+        generateLlmReport(report, options.outputPath, includePassed);
       }
 
       // Publish to the dashboard (auto when signed in + online, or forced with

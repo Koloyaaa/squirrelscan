@@ -61,8 +61,11 @@ import { getAuditFailureNotice, reportFailureReasonCode } from "../failure-notic
 import {
   flattenIssuesBySeverity,
   groupIssuesByCategory,
+  passedRuleScope,
+  reportPassedRules,
   type FlatIssue,
   type GroupedCheck,
+  type PassedRule,
 } from "../grouping";
 import { lockedRulesMessage } from "../locked-rules";
 import { notCheckedLines } from "../not-checked";
@@ -114,6 +117,8 @@ export interface HtmlRenderOptions {
    * or the caller supplies one, as before; a local audit carries neither.
    */
   offline?: boolean;
+  /** List the rules that passed after the issues (`--include-passed`). */
+  includePassed?: boolean;
 }
 
 /**
@@ -1041,6 +1046,41 @@ function PagesLens() {
 }
 
 /**
+ * The rules that passed (`--include-passed`), after the findings: one closed
+ * line that opens to a row per rule with where it held. Rendered only with the
+ * flag, so the default page, and the published one that never has it, stays
+ * byte-identical. Its classes are all used elsewhere on the page, so the
+ * compiled stylesheet does not change either.
+ */
+function PassedRules({ rules }: { rules: PassedRule[] }) {
+  return (
+    <section id="passed">
+      <details className="mt-12 border border-border bg-card p-4">
+        <summary className="flex cursor-pointer items-center gap-2 text-sm font-semibold">
+          <Sym id="check" className="size-4 shrink-0 text-primary" />
+          {`${plural(rules.length, "rule")} passed with no issues`}
+        </summary>
+        <ul className="mt-3 grid text-sm">
+          {rules.map((r) => (
+            <li
+              key={r.id}
+              data-passed-rule={r.id}
+              className="flex flex-wrap items-center gap-2 border-b border-border py-2 last:border-b-0"
+            >
+              <span className="font-semibold">{r.name}</span>
+              <GTag group={getCategoryGroup(r.categoryCode)} />
+              <span className="text-xs text-muted-foreground">{r.categoryName}</span>
+              <code className="font-mono text-xs text-muted-foreground">{r.id}</code>
+              <span className="text-xs text-muted-foreground sm:ml-auto">{passedRuleScope(r)}</span>
+            </li>
+          ))}
+        </ul>
+      </details>
+    </section>
+  );
+}
+
+/**
  * A technology logo from our own asset host; hidden by the page script if it
  * fails to load. Never in an offline (local) report: that would be a remote request.
  */
@@ -1267,12 +1307,14 @@ function ReportPage({
   branding,
   faviconUrl,
   offline,
+  includePassed,
 }: {
   report: AuditReport;
   reportId?: string;
   branding?: ReportBranding;
   faviconUrl?: string;
   offline: boolean;
+  includePassed: boolean;
 }) {
   const host = hostOf(report);
   const favicon = !offline && faviconUrl ? sanitizeUrl(faviconUrl) : "#";
@@ -1302,6 +1344,7 @@ function ReportPage({
   );
   const es = editorSummaryView(report.editorSummary, report);
   const priorities = es?.priorities ?? [];
+  const passedRules = reportPassedRules(report, includePassed);
   const known: Known = new Map(issues.map((i) => [i.id, i.group]));
   const techName = new Map((report.technologies?.items ?? []).map((t) => [t.id, t.name]));
   const techIcon = new Map(
@@ -1464,6 +1507,7 @@ function ReportPage({
                         ["#pages", "Pages"],
                       ]
                     : []),
+                  ...(passedRules.length > 0 ? [["#passed", "Passed"]] : []),
                   ...(report.technologies?.items.length || report.siteMetadata
                     ? [["#site", "Site"]]
                     : []),
@@ -1837,6 +1881,8 @@ function ReportPage({
             <Panel className="mt-8 text-center text-primary">✓ No issues found</Panel>
           )}
 
+          {passedRules.length > 0 && <PassedRules rules={passedRules} />}
+
           <SiteContext report={report} offline={offline} />
 
           {locked && !localRun && (
@@ -1917,6 +1963,7 @@ export function renderHtml(report: AuditReport, options?: HtmlRenderOptions): st
         branding={options?.branding}
         faviconUrl={options?.faviconUrl}
         offline={options?.offline ?? true}
+        includePassed={options?.includePassed ?? false}
       />,
     )
   );

@@ -3,7 +3,7 @@
 import type { AuditReport, CheckItem } from "../types";
 import { getScoreGrade } from "../scoring";
 import { getGroupName } from "../categories";
-import { groupIssuesByCategory, flattenIssuesBySeverity } from "../grouping";
+import { groupIssuesByCategory, flattenIssuesBySeverity, reportPassedRules } from "../grouping";
 import { ruleAffectedPages, ruleAffectedRollup, ruleCarriedPageCount } from "../affected-pages";
 import { getDocsUrl } from "../docs";
 import { domainAgeYears } from "../site-metadata";
@@ -31,6 +31,8 @@ import { refusedFetchLines, reportFailureReasonCode } from "../failure-notice";
 
 export interface LlmRenderOptions {
   version?: string;
+  /** List the rules that passed after the issues (`--include-passed`). */
+  includePassed?: boolean;
 }
 
 function escapeXml(str: string): string {
@@ -519,6 +521,17 @@ export function renderLlm(report: AuditReport, options?: LlmRenderOptions): stri
     lines.push("</issues>");
   } else {
     lines.push("<issues/>");
+  }
+
+  const passedRules = reportPassedRules(report, options?.includePassed);
+  if (passedRules.length > 0) {
+    lines.push(`<passed count="${passedRules.length}">`);
+    for (const rule of passedRules) {
+      lines.push(
+        `${indent(1)}<rule id="${escapeXml(rule.id)}" name="${escapeXml(rule.name)}" category="${escapeXml(rule.categoryName)}" scope="${rule.scope}" pages="${rule.pages}"/>`,
+      );
+    }
+    lines.push("</passed>");
   }
 
   // pub#629: rules that do not apply to a local or private-network host. An
