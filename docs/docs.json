@@ -670,10 +670,21 @@
           {
             "group": "SEO",
             "pages": [
+              "glossary/content-freshness",
+              "glossary/e-e-a-t",
+              "glossary/entity",
               "glossary/geo-meta-tags",
+              "glossary/entity-id",
               "glossary/json-ld",
+              "glossary/local-business-schema",
+              "glossary/nap-consistency",
+              "glossary/organization-schema",
+              "glossary/product-schema",
+              "glossary/rich-results",
               "glossary/robots-txt",
-              "glossary/structured-data"
+              "glossary/structured-data",
+              "glossary/thin-content",
+              "glossary/ymyl"
             ]
           },
           {
