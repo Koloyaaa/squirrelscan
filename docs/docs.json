@@ -670,10 +670,29 @@
           {
             "group": "SEO",
             "pages": [
+              "glossary/accessible-name",
+              "glossary/aria",
+              "glossary/color-contrast",
               "glossary/geo-meta-tags",
               "glossary/json-ld",
+              "glossary/mobile-friendly",
               "glossary/robots-txt",
-              "glossary/structured-data"
+              "glossary/structured-data",
+              "glossary/viewport-meta-tag",
+              "glossary/wcag"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "glossary/content-security-policy",
+              "glossary/cookie-attributes",
+              "glossary/cookie-consent",
+              "glossary/hacked-site",
+              "glossary/hsts",
+              "glossary/https",
+              "glossary/leaked-secrets",
+              "glossary/security-headers"
             ]
           },
           {
