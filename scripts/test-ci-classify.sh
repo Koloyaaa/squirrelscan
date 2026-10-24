@@ -26,8 +26,9 @@ expect() {
 expect "0 0 0 0 0" "docs only" docs/guides/ci.mdx docs/docs.json
 expect "0 0 0 0 0" "root markdown only" CONTRIBUTING.md
 expect "0 0 0 0 0" "docs + root markdown (#1051)" docs/glossary/index.mdx CONTRIBUTING.md
-expect "0 0 0 0 0" "all root docs + templates" README.md CODE_OF_CONDUCT.md SECURITY.md \
+expect "0 0 0 0 0" "all root docs + templates" README.md AGENTS.md CODE_OF_CONDUCT.md SECURITY.md \
   TRADEMARKS.md .github/DOCS_STYLE.md .github/ISSUE_TEMPLATE/bug.md .github/PULL_REQUEST_TEMPLATE.md
+expect "1 1 1 1 1" "AGENTS.md in a subdirectory of npm" npm/AGENTS.md
 expect "0 0 0 0 0" "docs scripts edit (#1051)" docs/package.json docs/scripts/glossary.ts CONTRIBUTING.md
 expect "1 1 1 1 1" "docs dependency bump" docs/package.json bun.lock
 expect "1 0 0 0 0" "rules tests only (#1052)" packages/rules/tests/docs-rule-pages.test.ts

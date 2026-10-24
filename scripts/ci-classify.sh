@@ -43,7 +43,7 @@ while IFS= read -r path || [ -n "$path" ]; do
     # root workspace member, so a dependency change there also moves bun.lock
     # (which runs everything), and without that the docs job's frozen install
     # fails.
-    docs/* | README.md | CONTRIBUTING.md | CODE_OF_CONDUCT.md | SECURITY.md | \
+    docs/* | README.md | CONTRIBUTING.md | AGENTS.md | CODE_OF_CONDUCT.md | SECURITY.md | \
       TRADEMARKS.md | .github/DOCS_STYLE.md | .github/ISSUE_TEMPLATE/* | \
       .github/PULL_REQUEST_TEMPLATE*)
       ;;

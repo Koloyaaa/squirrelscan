@@ -2,6 +2,8 @@
 
 Thanks for contributing to squirrelscan. Bug fixes, rules, tests, documentation, and focused performance improvements are welcome.
 
+Working with a coding agent, or want the long version? [AGENTS.md](AGENTS.md) covers the repo layout, adding a rule or a CLI command, test conventions, untrusted-input rules and the CI checks that catch people out.
+
 ## Development
 
 Use Bun 1.4.4 or the version in `package.json`.
