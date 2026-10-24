@@ -4,7 +4,14 @@
 // dir, so no fixture page ends up in the published site.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -61,6 +68,18 @@ describe("anchors a page renders", () => {
         "tiers",
       ].sort()
     );
+  });
+
+  test("the CSP page keeps both Related rules anchors", () => {
+    const page = readFileSync(
+      new URL("../rules/security/csp.mdx", import.meta.url),
+      "utf8"
+    );
+    expect((page.match(/^## Related rules$/gm) ?? [])).toHaveLength(1);
+
+    const ids = anchorsOf(page);
+    expect(ids.has("related-rules")).toBe(true);
+    expect(ids.has("related-rules-1")).toBe(true);
   });
 
   test("slugify and renderedText match github-slugger over the rendered text", () => {
