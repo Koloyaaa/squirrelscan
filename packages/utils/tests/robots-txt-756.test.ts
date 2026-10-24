@@ -70,16 +70,47 @@ Disallow: /slow/
     expect(result.rules[0].crawlDelay).toBe(5);
   });
 
-  it("handles comments", () => {
+  it("ignores inline comments", () => {
     const content = `
 # This is a comment
 User-agent: *
 # Another comment
-Disallow: /private/ # inline comment is NOT standard
+Disallow: / # no training
 `;
     const result = parseRobotsTxt(content, "https://example.com/robots.txt");
 
     expect(result.rules.length).toBe(1);
+    expect(result.rules[0].rules).toEqual([{ type: "disallow", path: "/" }]);
+  });
+
+  it("shares a group's rules across stacked user agents", () => {
+    const content = `
+User-agent: GPTBot
+User-agent: ClaudeBot
+Disallow: /
+`;
+    const result = parseRobotsTxt(content, "https://example.com/robots.txt");
+
+    expect(result.rules).toEqual([
+      { userAgent: "GPTBot", rules: [{ type: "disallow", path: "/" }] },
+      { userAgent: "ClaudeBot", rules: [{ type: "disallow", path: "/" }] },
+    ]);
+  });
+
+  it("keeps a named group whose only rule is an empty disallow", () => {
+    const content = `
+User-agent: GPTBot
+Disallow:
+
+User-agent: *
+Disallow: /
+`;
+    const result = parseRobotsTxt(content, "https://example.com/robots.txt");
+
+    expect(result.rules).toEqual([
+      { userAgent: "GPTBot", rules: [] },
+      { userAgent: "*", rules: [{ type: "disallow", path: "/" }] },
+    ]);
   });
 
   it("handles empty content", () => {

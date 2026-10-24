@@ -119,25 +119,37 @@ export function parseRobotsTxt(content: string, url: string): RobotsTxtData {
   const sitemaps: string[] = [];
   const errors: string[] = [];
 
-  let currentUserAgent: string | null = null;
+  let currentUserAgents: string[] = [];
   let currentRules: { type: "allow" | "disallow"; path: string }[] = [];
   let currentCrawlDelay: number | undefined;
+  // Consecutive User-agent records belong to one group. The first non-UA
+  // record closes that header, so a later User-agent starts a new group.
+  let collectingUserAgents = true;
+  // Empty Allow/Disallow records do not match a path, but they still make the
+  // named group explicit and keep it from falling through to `*`.
+  let hasGroupRecord = false;
 
-  const flushCurrentRule = () => {
-    if (currentUserAgent && currentRules.length > 0) {
-      rules.push({
-        userAgent: currentUserAgent,
-        rules: [...currentRules],
-        crawlDelay: currentCrawlDelay,
-      });
+  const flushCurrentGroup = () => {
+    if (hasGroupRecord) {
+      for (const userAgent of currentUserAgents) {
+        rules.push({
+          userAgent,
+          rules: [...currentRules],
+          crawlDelay: currentCrawlDelay,
+        });
+      }
     }
+    currentUserAgents = [];
     currentRules = [];
     currentCrawlDelay = undefined;
+    collectingUserAgents = true;
+    hasGroupRecord = false;
   };
 
   for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
+    const commentIndex = rawLine.indexOf("#");
+    const line = (commentIndex === -1 ? rawLine : rawLine.slice(0, commentIndex)).trim();
+    if (!line) continue;
 
     const colonIndex = line.indexOf(":");
     if (colonIndex === -1) continue;
@@ -146,22 +158,29 @@ export function parseRobotsTxt(content: string, url: string): RobotsTxtData {
     const value = line.substring(colonIndex + 1).trim();
 
     switch (directive) {
-      case "user-agent":
-        flushCurrentRule();
-        currentUserAgent = value;
+      case "user-agent": {
+        if (!value) break;
+        if (!collectingUserAgents) flushCurrentGroup();
+        currentUserAgents.push(value);
         break;
+      }
       case "disallow":
-        if (currentUserAgent && value) {
-          currentRules.push({ type: "disallow", path: value });
+        if (currentUserAgents.length > 0) {
+          collectingUserAgents = false;
+          hasGroupRecord = true;
+          if (value) currentRules.push({ type: "disallow", path: value });
         }
         break;
       case "allow":
-        if (currentUserAgent && value) {
-          currentRules.push({ type: "allow", path: value });
+        if (currentUserAgents.length > 0) {
+          collectingUserAgents = false;
+          hasGroupRecord = true;
+          if (value) currentRules.push({ type: "allow", path: value });
         }
         break;
       case "crawl-delay":
-        if (currentUserAgent) {
+        if (currentUserAgents.length > 0) {
+          collectingUserAgents = false;
           const delay = Number.parseFloat(value);
           if (!Number.isNaN(delay)) {
             currentCrawlDelay = delay;
@@ -169,14 +188,17 @@ export function parseRobotsTxt(content: string, url: string): RobotsTxtData {
         }
         break;
       case "sitemap":
+        if (currentUserAgents.length > 0) collectingUserAgents = false;
         if (value) {
           sitemaps.push(value.trim());
         }
         break;
+      default:
+        if (currentUserAgents.length > 0) collectingUserAgents = false;
     }
   }
 
-  flushCurrentRule();
+  flushCurrentGroup();
 
   return {
     exists: true,

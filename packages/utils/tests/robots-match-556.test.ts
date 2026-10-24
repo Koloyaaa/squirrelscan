@@ -53,6 +53,28 @@ describe("isRobotsTxtDisallowed (pub#556)", () => {
     expect(blocked("/page", content)).toBe(false);
   });
 
+  test("stacked user agents share the following rules", () => {
+    const content = "User-agent: GPTBot\nUser-agent: ClaudeBot\nDisallow: /\n";
+    const data = robots(content);
+
+    expect(isRobotsTxtDisallowed("https://example.com/page", data, "GPTBot")).toBe(true);
+    expect(isRobotsTxtDisallowed("https://example.com/page", data, "ClaudeBot")).toBe(true);
+  });
+
+  test("an explicit empty disallow group overrides a blocked wildcard group", () => {
+    const content = "User-agent: GPTBot\nDisallow:\n\nUser-agent: *\nDisallow: /\n";
+    const data = robots(content);
+
+    expect(isRobotsTxtDisallowed("https://example.com/page", data, "GPTBot")).toBe(false);
+    expect(isRobotsTxtDisallowed("https://example.com/page", data, "OtherBot")).toBe(true);
+  });
+
+  test("inline comments do not become part of a rule path", () => {
+    const content = "User-agent: *\nDisallow: / # no training\n";
+
+    expect(blocked("/page", content)).toBe(true);
+  });
+
   test("a long run of wildcards is matched in linear time", () => {
     const pattern = `/${"a*".repeat(200)}b`;
     const start = performance.now();

@@ -17,6 +17,10 @@ How it works:
 
 ## [Unreleased]
 
+### Fixed
+
+- robots.txt parsing now gives consecutive `User-agent` lines the rules that follow them, keeps a named group whose empty `Disallow:` explicitly allows every path, and ignores inline comments, so AI-crawler and indexability checks match how crawlers read those common files (#1078).
+
 ## v0.0.133 (2026-10-24)
 
 White-label reports get a website and a footer, and the docs get a report walkthrough.
